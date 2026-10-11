@@ -29,18 +29,20 @@ MSF_PASSWORD = os.getenv('MSF_PASSWORD', 'yourpassword')
 MSF_SERVER = os.getenv('MSF_SERVER', '127.0.0.1')
 MSF_PORT_STR = os.getenv('MSF_PORT', '55553')
 MSF_SSL_STR = os.getenv('MSF_SSL', 'false')
+MSF_ENABLED_STR = os.getenv('MSF_ENABLED', 'true')
 PAYLOAD_SAVE_DIR = os.getenv('PAYLOAD_SAVE_DIR', str(pathlib.Path.home() / "payloads"))
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'info')
 
 logging.basicConfig(
+    level=LOG_LEVEL.upper(),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
 )
 logger = logging.getLogger("metasploit_mcp_server")
 logger.setLevel(LOG_LEVEL.upper())
-logger.debug(f"MSF_PASSWORD    : {MSF_PASSWORD}")
 logger.debug(f"MSF_SERVER      : {MSF_SERVER}")
 logger.debug(f"MSF_PORT_STR    : {MSF_PORT_STR}")
 logger.debug(f"MSF_SSL_STR     : {MSF_SSL_STR}")
+logger.debug(f"MSF_ENABLED     : {MSF_ENABLED_STR}")
 logger.debug(f"PAYLOAD_SAVE_DIR: {PAYLOAD_SAVE_DIR}")
 logger.debug(f"LOG_LEVEL       : {LOG_LEVEL}")
 
@@ -62,6 +64,18 @@ SHELL_PROMPT_RE = re.compile(r'([#$>]|%)\s*$') # Matches common shell prompts (#
 # --- Metasploit Client Setup ---
 
 _msf_client_instance: Optional[MsfRpcClient] = None
+
+_SENSITIVE_OPTION_PARTS = (
+    'PASS', 'PASSWORD', 'TOKEN', 'SECRET', 'PRIVATE', 'CREDENTIAL', 'API_KEY',
+)
+
+
+def _redact_options(options: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a safe representation of module options for diagnostic logging."""
+    return {
+        key: '<redacted>' if any(part in key.upper() for part in _SENSITIVE_OPTION_PARTS) else value
+        for key, value in options.items()
+    }
 
 def initialize_msf_client() -> MsfRpcClient:
     """
@@ -427,7 +441,11 @@ async def _get_module_object(module_type: str, module_name: str) -> Any:
 
 async def _set_module_options(module_obj: Any, options: Dict[str, Any]):
     """Sets options on a module object, performing basic type guessing."""
-    logger.debug(f"Setting options for module {getattr(module_obj, 'fullname', '')}: {options}")
+    logger.debug(
+        "Setting options for module %s: %s",
+        getattr(module_obj, 'fullname', ''),
+        _redact_options(options),
+    )
     for k, v in options.items():
         # Basic type guessing
         original_value = v
@@ -1732,13 +1750,17 @@ if __name__ == "__main__":
     if args.debug:
         LOG_LEVEL = 'debug'
         logger.setLevel(LOG_LEVEL.upper())
+        logging.getLogger().setLevel(LOG_LEVEL.upper())
 
-    # Initialize MSF Client - Critical for server function
-    try:
-        initialize_msf_client()
-    except (ValueError, ConnectionError, RuntimeError) as e:
-        logger.critical(f"CRITICAL: Failed to initialize Metasploit client on startup: {e}. Server cannot function.")
-        sys.exit(1) # Exit if MSF connection fails at start
+    # Initialize MSF Client unless explicitly disabled for non-Metasploit use.
+    if MSF_ENABLED_STR.lower() in {'1', 'true', 'yes', 'on'}:
+        try:
+            initialize_msf_client()
+        except (ValueError, ConnectionError, RuntimeError) as e:
+            logger.critical(f"CRITICAL: Failed to initialize Metasploit client on startup: {e}. Server cannot function.")
+            sys.exit(1)
+    else:
+        logger.warning("Metasploit integration is disabled (MSF_ENABLED=%s).", MSF_ENABLED_STR)
 
     if args.transport == 'stdio':
         logger.info("Starting MCP server in STDIO transport mode.")

@@ -58,8 +58,13 @@ This MCP server provides a bridge between large language models like Claude and 
    MSF_SERVER=127.0.0.1
    MSF_PORT=55553
    MSF_SSL=false
+   MSF_ENABLED=true
    PAYLOAD_SAVE_DIR=/path/to/save/payloads  # Optional: Where to save generated payloads
    ```
+
+   Set `MSF_ENABLED=false` to start the MCP server without connecting to
+   Metasploit. Metasploit-dependent tools remain unavailable until the
+   integration is enabled.
 
 ## Usage
 
@@ -89,6 +94,24 @@ python MetasploitMCP.py --transport stdio
 Additional options for HTTP mode:
 ```bash
 python MetasploitMCP.py --transport http --host 0.0.0.0 --port 8085
+```
+
+### Terminal Prompt Summarizer
+
+`prompt_summarizer.py` creates one fenced code block that can be copied into
+an AI chat or terminal-aware assistant. It does not require the Metasploit
+server or any third-party package:
+
+```bash
+# Interactive: enter an acronym, then paste text and finish with a blank line
+python3 prompt_summarizer.py
+
+# Read source material from a file and copy the generated prompt on macOS
+python3 prompt_summarizer.py --acronym RCA --file incident.txt --copy
+
+# Pipe source material from another terminal command
+printf '%s\n' 'The service failed after deployment.' | \
+  python3 prompt_summarizer.py --acronym RCA
 ```
 
 ### Claude Desktop Integration

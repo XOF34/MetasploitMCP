@@ -53,7 +53,7 @@ sys.modules['pymetasploit3.msfrpc'].MsfRpcError = MockMsfRpcError
 # Import after mocking
 from MetasploitMCP import (
     _get_module_object, _set_module_options, initialize_msf_client, 
-    get_msf_client, get_msf_console, run_command_safely,
+    get_msf_client, get_msf_console, run_command_safely, _redact_options,
     find_available_port
 )
 
@@ -197,6 +197,22 @@ class TestSetModuleOptions:
         assert call_dict['SSL'] is True
         assert call_dict['VERBOSE'] is False
         assert call_dict['THREADS'] == 10
+
+    def test_redact_options_hides_sensitive_values(self):
+        options = {
+            'RHOSTS': '192.168.1.1',
+            'PASSWORD': 'secret',
+            'API_TOKEN': 'token',
+            'USERNAME': 'operator',
+        }
+
+        result = _redact_options(options)
+
+        assert result['RHOSTS'] == options['RHOSTS']
+        assert result['USERNAME'] == options['USERNAME']
+        assert result['PASSWORD'] == '<redacted>'
+        assert result['API_TOKEN'] == '<redacted>'
+        assert options['PASSWORD'] == 'secret'
 
     @pytest.mark.asyncio
     async def test_set_module_options_error(self, mock_module):
