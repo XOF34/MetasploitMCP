@@ -51,10 +51,11 @@ sys.modules['pymetasploit3.msfrpc'].MsfConsole = MockMsfConsole
 sys.modules['pymetasploit3.msfrpc'].MsfRpcError = MockMsfRpcError
 
 # Import after mocking
+import MetasploitMCP
 from MetasploitMCP import (
-    _get_module_object, _set_module_options, initialize_msf_client, 
+    _get_module_object, _set_module_options, initialize_msf_client,
     get_msf_client, get_msf_console, run_command_safely, _redact_options,
-    find_available_port
+    find_available_port, start_msf_if_enabled
 )
 
 
@@ -204,14 +205,20 @@ class TestSetModuleOptions:
             'PASSWORD': 'secret',
             'API_TOKEN': 'token',
             'USERNAME': 'operator',
+            'SSH_KEYFILE': '/home/u/.ssh/id_rsa',
+            'PSK': 'preshared',
+            'SNMP_COMMUNITY': 'public',
+            'CERT_PEM': '-----BEGIN CERTIFICATE-----',
+            'NTLM_HASH': 'aad3b435b51404eeaad3b435b51404ee',
         }
 
         result = _redact_options(options)
 
         assert result['RHOSTS'] == options['RHOSTS']
         assert result['USERNAME'] == options['USERNAME']
-        assert result['PASSWORD'] == '<redacted>'
-        assert result['API_TOKEN'] == '<redacted>'
+        for key in ('PASSWORD', 'API_TOKEN', 'SSH_KEYFILE', 'PSK',
+                    'SNMP_COMMUNITY', 'CERT_PEM', 'NTLM_HASH'):
+            assert result[key] == '<redacted>'
         assert options['PASSWORD'] == 'secret'
 
     @pytest.mark.asyncio
@@ -351,6 +358,60 @@ class TestFindAvailablePort:
         
         port = find_available_port(8080, max_attempts=3)
         assert port == 8081
+
+
+class TestStartMsfIfEnabled:
+    """Test the MSF_ENABLED startup gate."""
+
+    def test_disabled_skips_client_init(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(MetasploitMCP, 'MSF_ENABLED_STR', 'false')
+        monkeypatch.setattr(MetasploitMCP, 'initialize_msf_client', lambda: calls.append('init'))
+
+        start_msf_if_enabled()
+
+        assert calls == []
+
+    def test_disabled_variants_skip_client_init(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(MetasploitMCP, 'initialize_msf_client', lambda: calls.append('init'))
+
+        for value in ('false', 'FALSE', '0', 'no', 'off', ''):
+            monkeypatch.setattr(MetasploitMCP, 'MSF_ENABLED_STR', value)
+            start_msf_if_enabled()
+
+        assert calls == []
+
+    def test_enabled_initializes_client(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(MetasploitMCP, 'MSF_ENABLED_STR', 'true')
+        monkeypatch.setattr(MetasploitMCP, 'initialize_msf_client', lambda: calls.append('init'))
+
+        start_msf_if_enabled()
+
+        assert calls == ['init']
+
+    def test_truthy_variants_initialize_client(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(MetasploitMCP, 'initialize_msf_client', lambda: calls.append('init'))
+
+        for value in ('1', 'TRUE', 'Yes', 'on'):
+            monkeypatch.setattr(MetasploitMCP, 'MSF_ENABLED_STR', value)
+            start_msf_if_enabled()
+
+        assert calls == ['init'] * 4
+
+    def test_enabled_failure_exits_with_code_1(self, monkeypatch):
+        def boom():
+            raise ConnectionError("no RPC")
+
+        monkeypatch.setattr(MetasploitMCP, 'MSF_ENABLED_STR', 'yes')
+        monkeypatch.setattr(MetasploitMCP, 'initialize_msf_client', boom)
+
+        with pytest.raises(SystemExit) as excinfo:
+            start_msf_if_enabled()
+
+        assert excinfo.value.code == 1
 
 
 if __name__ == "__main__":

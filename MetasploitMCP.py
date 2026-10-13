@@ -65,15 +65,16 @@ SHELL_PROMPT_RE = re.compile(r'([#$>]|%)\s*$') # Matches common shell prompts (#
 
 _msf_client_instance: Optional[MsfRpcClient] = None
 
-_SENSITIVE_OPTION_PARTS = (
-    'PASS', 'PASSWORD', 'TOKEN', 'SECRET', 'PRIVATE', 'CREDENTIAL', 'API_KEY',
+_SENSITIVE_KEY_PARTS = (
+    'PASS', 'TOKEN', 'SECRET', 'PRIVATE', 'CREDENTIAL',
+    'KEY', 'CERT', 'PSK', 'COMMUNITY', 'HASH',
 )
 
 
 def _redact_options(options: Dict[str, Any]) -> Dict[str, Any]:
     """Return a safe representation of module options for diagnostic logging."""
     return {
-        key: '<redacted>' if any(part in key.upper() for part in _SENSITIVE_OPTION_PARTS) else value
+        key: '<redacted>' if any(part in key.upper() for part in _SENSITIVE_KEY_PARTS) else value
         for key, value in options.items()
     }
 
@@ -116,6 +117,17 @@ def initialize_msf_client() -> MsfRpcClient:
     except Exception as e:
         logger.error(f"An unexpected error occurred during MSF client initialization: {e}", exc_info=True)
         raise RuntimeError(f"Unexpected error initializing MSF client: {e}") from e
+
+def start_msf_if_enabled() -> None:
+    """Connect to Metasploit unless MSF_ENABLED disables the integration."""
+    if MSF_ENABLED_STR.lower() in {'1', 'true', 'yes', 'on'}:
+        try:
+            initialize_msf_client()
+        except (ValueError, ConnectionError, RuntimeError) as e:
+            logger.critical(f"CRITICAL: Failed to initialize Metasploit client on startup: {e}. Server cannot function.")
+            sys.exit(1)
+    else:
+        logger.warning("Metasploit integration is disabled (MSF_ENABLED=%s).", MSF_ENABLED_STR)
 
 def get_msf_client() -> MsfRpcClient:
     """Gets the initialized MSF client instance, raising an error if not ready."""
@@ -1753,14 +1765,7 @@ if __name__ == "__main__":
         logging.getLogger().setLevel(LOG_LEVEL.upper())
 
     # Initialize MSF Client unless explicitly disabled for non-Metasploit use.
-    if MSF_ENABLED_STR.lower() in {'1', 'true', 'yes', 'on'}:
-        try:
-            initialize_msf_client()
-        except (ValueError, ConnectionError, RuntimeError) as e:
-            logger.critical(f"CRITICAL: Failed to initialize Metasploit client on startup: {e}. Server cannot function.")
-            sys.exit(1)
-    else:
-        logger.warning("Metasploit integration is disabled (MSF_ENABLED=%s).", MSF_ENABLED_STR)
+    start_msf_if_enabled()
 
     if args.transport == 'stdio':
         logger.info("Starting MCP server in STDIO transport mode.")
