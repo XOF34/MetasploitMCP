@@ -60,6 +60,7 @@ This MCP server provides a bridge between large language models like Claude and 
    MSF_SSL=false
    MSF_ENABLED=true
    PAYLOAD_SAVE_DIR=/path/to/save/payloads  # Optional: Where to save generated payloads
+   MCP_AUTH_TOKEN=replace-with-a-long-random-token  # Required when binding HTTP to a non-localhost address
    ```
 
    Set `MSF_ENABLED=false` to start the MCP server without connecting to
@@ -150,6 +151,12 @@ For other MCP clients that use HTTP/SSE:
 
 2. Configure your MCP client to connect to:
    - SSE endpoint: `http://your-server-ip:8085/sse`
+
+When `MCP_AUTH_TOKEN` is configured, send it as `Authorization: Bearer <token>`
+or `X-MCP-Token: <token>` on the `/sse`, `/messages/`, and `/files/{filename}`
+endpoints. The server refuses non-local HTTP bindings without this token.
+Successful `generate_payload` responses include a `download_url` for the
+generated file; downloads are confined to `PAYLOAD_SAVE_DIR`.
 
 ## Security Considerations
 

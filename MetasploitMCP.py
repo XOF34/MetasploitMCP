@@ -6,6 +6,7 @@ import logging
 import os
 import pathlib
 import re
+import secrets
 import shlex
 import socket
 import subprocess
@@ -31,6 +32,7 @@ MSF_PORT_STR = os.getenv('MSF_PORT', '55553')
 MSF_SSL_STR = os.getenv('MSF_SSL', 'false')
 MSF_ENABLED_STR = os.getenv('MSF_ENABLED', 'true')
 PAYLOAD_SAVE_DIR = os.getenv('PAYLOAD_SAVE_DIR', str(pathlib.Path.home() / "payloads"))
+MCP_AUTH_TOKEN = os.getenv('MCP_AUTH_TOKEN', '').strip()
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'info')
 
 logging.basicConfig(
@@ -44,6 +46,7 @@ logger.debug(f"MSF_PORT_STR    : {MSF_PORT_STR}")
 logger.debug(f"MSF_SSL_STR     : {MSF_SSL_STR}")
 logger.debug(f"MSF_ENABLED     : {MSF_ENABLED_STR}")
 logger.debug(f"PAYLOAD_SAVE_DIR: {PAYLOAD_SAVE_DIR}")
+logger.debug("MCP_AUTH_TOKEN: %s", "<configured>" if MCP_AUTH_TOKEN else "<not configured>")
 logger.debug(f"LOG_LEVEL       : {LOG_LEVEL}")
 
 session_shell_type: Dict[str, str] = {}
@@ -77,6 +80,72 @@ def _redact_options(options: Dict[str, Any]) -> Dict[str, Any]:
         key: '<redacted>' if any(part in key.upper() for part in _SENSITIVE_KEY_PARTS) else value
         for key, value in options.items()
     }
+
+
+def _safe_payload_path(filename: str) -> pathlib.Path:
+    """Return a payload path confined to PAYLOAD_SAVE_DIR."""
+    base_dir = pathlib.Path(PAYLOAD_SAVE_DIR).expanduser().resolve()
+    candidate = (base_dir / filename).resolve()
+    if candidate.parent != base_dir:
+        raise ValueError("Invalid payload filename.")
+    return candidate
+
+
+def _read_rpc_value(container: Any, attribute: str) -> Any:
+    """Read pymetasploit3 properties and test doubles consistently."""
+    value = getattr(container, attribute)
+    return value() if callable(value) else value
+
+
+def _require_auth(
+    scope: Dict[str, Any], headers: Dict[bytes, bytes]
+) -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
+    """Return an ASGI response when authentication fails, otherwise None."""
+    if not MCP_AUTH_TOKEN:
+        return None
+
+    authorization = headers.get(b'authorization', b'').decode('latin-1')
+    supplied_token = ''
+    if authorization.lower().startswith('bearer '):
+        supplied_token = authorization[7:].strip()
+    if not supplied_token:
+        supplied_token = headers.get(b'x-mcp-token', b'').decode('latin-1').strip()
+
+    if secrets.compare_digest(supplied_token, MCP_AUTH_TOKEN):
+        return None
+
+    logger.warning(
+        "Rejected unauthenticated %s request from %s",
+        scope.get('path', ''),
+        scope.get('client', ('unknown',))[0],
+    )
+    return {
+        "type": "http.response.start",
+        "status": 401,
+        "headers": [(b"content-type", b"application/json"), (b"www-authenticate", b"Bearer")],
+    }, {
+        "type": "http.response.body",
+        "body": b'{"detail":"Authentication required"}',
+    }
+
+
+class AuthenticatedASGI:
+    """Protect an ASGI endpoint when MCP_AUTH_TOKEN is configured."""
+
+    def __init__(self, app: Any):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            return await self.app(scope, receive, send)
+        headers = dict(scope.get("headers", []))
+        rejection = _require_auth(scope, headers)
+        if rejection:
+            start, body = rejection
+            await send(start)
+            await send(body)
+            return
+        await self.app(scope, receive, send)
 
 def initialize_msf_client() -> MsfRpcClient:
     """
@@ -146,7 +215,7 @@ async def check_msf_connection() -> Dict[str, Any]:
         client = get_msf_client()
         logger.debug(f"Testing MSF connection with {RPC_CALL_TIMEOUT}s timeout...")
         version_info = await asyncio.wait_for(
-            asyncio.to_thread(lambda: client.core.version),
+            asyncio.to_thread(lambda: _read_rpc_value(client.core, "version")),
             timeout=RPC_CALL_TIMEOUT
         )
         msf_version = version_info.get('version', 'N/A') if isinstance(version_info, dict) else 'N/A'
@@ -556,7 +625,7 @@ async def _execute_module_rpc(
             if module_type == 'exploit' and 'handler' in full_module_path:
                  # Check jobs list for a match based on payload/lhost/lport
                  await asyncio.sleep(1.0)
-                 jobs_list = await asyncio.to_thread(lambda: client.jobs.list)
+                 jobs_list = await asyncio.to_thread(lambda: _read_rpc_value(client.jobs, "list"))
                  for jid, jinfo in jobs_list.items():
                      if isinstance(jinfo, dict) and jinfo.get('name','').endswith('Handler') and \
                         jinfo.get('datastore',{}).get('LHOST') == module_options.get('LHOST') and \
@@ -574,7 +643,7 @@ async def _execute_module_rpc(
              logger.info(f"Exploit job {job_id} (UUID: {uuid}) started. Polling for session (timeout: {EXPLOIT_SESSION_POLL_TIMEOUT}s)...")
              while (asyncio.get_event_loop().time() - start_time) < EXPLOIT_SESSION_POLL_TIMEOUT:
                  try:
-                     sessions_list = await asyncio.to_thread(lambda: client.sessions.list)
+                     sessions_list = await asyncio.to_thread(lambda: _read_rpc_value(client.sessions, "list"))
                      for s_id, s_info in sessions_list.items():
                          # Ensure comparison is robust (uuid might be str or bytes, info dict keys too)
                          s_id_str = str(s_id)
@@ -783,7 +852,7 @@ async def list_exploits(search_term: str = "") -> List[str]:
         # Add timeout to prevent hanging on slow/unresponsive MSF server
         logger.debug(f"Calling client.modules.exploits with {RPC_CALL_TIMEOUT}s timeout...")
         exploits = await asyncio.wait_for(
-            asyncio.to_thread(lambda: client.modules.exploits),
+            asyncio.to_thread(lambda: _read_rpc_value(client.modules, "exploits")),
             timeout=RPC_CALL_TIMEOUT
         )
         logger.debug(f"Retrieved {len(exploits)} total exploits from MSF.")
@@ -827,7 +896,7 @@ async def list_payloads(platform: str = "", arch: str = "") -> List[str]:
         # Add timeout to prevent hanging on slow/unresponsive MSF server
         logger.debug(f"Calling client.modules.payloads with {RPC_CALL_TIMEOUT}s timeout...")
         payloads = await asyncio.wait_for(
-            asyncio.to_thread(lambda: client.modules.payloads),
+            asyncio.to_thread(lambda: _read_rpc_value(client.modules, "payloads")),
             timeout=RPC_CALL_TIMEOUT
         )
         logger.debug(f"Retrieved {len(payloads)} total payloads from MSF.")
@@ -978,11 +1047,30 @@ async def generate_payload(
             safe_format = re.sub(r'[^a-zA-Z0-9_]', '_', format_type)
             final_filename = f"payload_{safe_payload_type}_{timestamp}.{safe_format}"
 
-        save_path = os.path.join(PAYLOAD_SAVE_DIR, final_filename)
+        try:
+            save_path_obj = _safe_payload_path(final_filename)
+        except ValueError as e:
+            logger.error("Rejected unsafe payload filename %r: %s", final_filename, e)
+            return {
+                "status": "error",
+                "message": f"Payload generated but could not select a safe file path: {e}",
+                "payload_size": payload_size,
+                "format": format_type,
+            }
+
+        # Avoid overwriting an existing payload when callers reuse a filename.
+        os.makedirs(save_path_obj.parent, exist_ok=True)
+        suffix = 1
+        while save_path_obj.exists():
+            save_path_obj = save_path_obj.with_name(
+                f"{save_path_obj.stem}_{suffix}{save_path_obj.suffix}"
+            )
+            suffix += 1
+        save_path = str(save_path_obj)
 
         # Write payload to file
         try:
-            with open(save_path, "wb") as f:
+            with open(save_path, "xb") as f:
                 f.write(raw_payload_bytes)
             logger.info(f"Payload saved to {save_path}")
             return {
@@ -990,7 +1078,8 @@ async def generate_payload(
                 "message": f"Payload '{payload_type}' generated successfully and saved.",
                 "payload_size": payload_size,
                 "format": format_type,
-                "server_save_path": save_path
+                "server_save_path": save_path,
+                "download_url": f"/files/{save_path_obj.name}",
             }
         except IOError as e:
             logger.error(f"Failed to write payload to {save_path}: {e}")
@@ -1074,7 +1163,7 @@ async def run_exploit(
              is_vulnerable = "appears vulnerable" in output or "is vulnerable" in output or "+ vulnerable" in output
              # Check for negative indicators (more reliable sometimes)
              is_not_vulnerable = "does not appear vulnerable" in output or "is not vulnerable" in output or "target is not vulnerable" in output or "check failed" in output
-             if check_result.get('status') == "errror":
+             if check_result.get('status') == "error":
                  logger.warning(f"Error from metasploit: {check_result}")
                  return {"status": "aborted", "message": f"Check indicates a failure: {check_result.get('message')}", "check_output": check_result.get("module_output")}
 
@@ -1131,13 +1220,13 @@ async def run_post_module(
         Dictionary with execution results or error details.
     """
     logger.info(f"Request to run post module {module_name} on session {session_id}. Job: {run_as_job}")
-    module_options = options or {}
+    module_options = dict(options or {})
     module_options['SESSION'] = session_id # Ensure SESSION is always set
 
     # Add basic session validation before running
     client = get_msf_client()
     try:
-        current_sessions = await asyncio.to_thread(lambda: client.sessions.list)
+        current_sessions = await asyncio.to_thread(lambda: _read_rpc_value(client.sessions, "list"))
         if str(session_id) not in current_sessions:
              logger.error(f"Session {session_id} not found for post module {module_name}.")
              return {"status": "error", "message": f"Session {session_id} not found.", "module": module_name}
@@ -1185,7 +1274,7 @@ async def run_auxiliary_module(
         Dictionary with execution results or error details.
     """
     logger.info(f"Request to run auxiliary module {module_name}. Job: {run_as_job}, Check: {check_target}")
-    module_options = options or {}
+    module_options = dict(options or {})
 
     if check_target:
         logger.info(f"Performing check first for auxiliary module {module_name}...")
@@ -1239,7 +1328,7 @@ async def list_active_sessions() -> Dict[str, Any]:
     try:
         logger.debug(f"Calling client.sessions.list with {RPC_CALL_TIMEOUT}s timeout...")
         sessions_dict = await asyncio.wait_for(
-            asyncio.to_thread(lambda: client.sessions.list),
+            asyncio.to_thread(lambda: _read_rpc_value(client.sessions, "list")),
             timeout=RPC_CALL_TIMEOUT
         )
         if not isinstance(sessions_dict, dict):
@@ -1289,7 +1378,7 @@ async def send_session_command(
 
     try:
         # --- Get Session Info and Object ---
-        current_sessions = await asyncio.to_thread(lambda: client.sessions.list)
+        current_sessions = await asyncio.to_thread(lambda: _read_rpc_value(client.sessions, "list"))
         if session_id_str not in current_sessions:
             logger.error(f"Session {session_id} not found.")
             return {"status": "error", "message": f"Session {session_id} not found."}
@@ -1344,14 +1433,16 @@ async def send_session_command(
                 # Try a final read for potentially partial output
                 try:
                     output = await asyncio.to_thread(lambda: session.read()) or ""
-                except: pass
+                except Exception as read_err:
+                    logger.debug("Unable to read partial Meterpreter output after timeout: %s", read_err)
             except (MsfRpcError, Exception) as run_err:
                 logger.error(f"Error during Meterpreter run_with_output for command '{command}': {run_err}")
                 message = f"Error executing Meterpreter command: {run_err}"
                 # Try a final read
                 try:
                     output = await asyncio.to_thread(lambda: session.read()) or ""
-                except: pass
+                except Exception as read_err:
+                    logger.debug("Unable to read partial Meterpreter output after command error: %s", read_err)
 
         elif session_type == 'shell':
             logger.debug(f"Using manual read loop for Shell session {session_id}")
@@ -1441,7 +1532,7 @@ async def list_listeners() -> Dict[str, Any]:
     try:
         logger.debug(f"Calling client.jobs.list with {RPC_CALL_TIMEOUT}s timeout...")
         jobs = await asyncio.wait_for(
-            asyncio.to_thread(lambda: client.jobs.list),
+            asyncio.to_thread(lambda: _read_rpc_value(client.jobs, "list")),
             timeout=RPC_CALL_TIMEOUT
         )
         if not isinstance(jobs, dict):
@@ -1535,7 +1626,7 @@ async def start_listener(
     # exploit/multi/handler options
     module_options = {'ExitOnSession': exit_on_session}
     # Payload options (passed within the payload_spec)
-    payload_options = parsed_additional_options
+    payload_options = dict(parsed_additional_options)
     payload_options['LHOST'] = lhost
     payload_options['LPORT'] = lport
 
@@ -1571,7 +1662,7 @@ async def stop_job(job_id: int) -> Dict[str, Any]:
 
     try:
         # Check if job exists and get name
-        jobs_before = await asyncio.to_thread(lambda: client.jobs.list)
+        jobs_before = await asyncio.to_thread(lambda: _read_rpc_value(client.jobs, "list"))
         if job_id_str not in jobs_before:
             logger.error(f"Job {job_id} not found, cannot stop.")
             return {"status": "error", "message": f"Job {job_id} not found."}
@@ -1585,7 +1676,7 @@ async def stop_job(job_id: int) -> Dict[str, Any]:
 
         # Verify job stopped by checking list again
         await asyncio.sleep(1.0) # Give MSF time to process stop
-        jobs_after = await asyncio.to_thread(lambda: client.jobs.list)
+        jobs_after = await asyncio.to_thread(lambda: _read_rpc_value(client.jobs, "list"))
         job_stopped = job_id_str not in jobs_after
 
         if job_stopped:
@@ -1632,7 +1723,7 @@ async def terminate_session(session_id: int) -> Dict[str, Any]:
     
     try:
         # Check if session exists
-        current_sessions = await asyncio.to_thread(lambda: client.sessions.list)
+        current_sessions = await asyncio.to_thread(lambda: _read_rpc_value(client.sessions, "list"))
         if session_id_str not in current_sessions:
             logger.error(f"Session {session_id} not found.")
             return {"status": "error", "message": f"Session {session_id} not found."}
@@ -1645,7 +1736,7 @@ async def terminate_session(session_id: int) -> Dict[str, Any]:
         
         # Verify termination
         await asyncio.sleep(1.0)  # Give MSF time to process termination
-        current_sessions_after = await asyncio.to_thread(lambda: client.sessions.list)
+        current_sessions_after = await asyncio.to_thread(lambda: _read_rpc_value(client.sessions, "list"))
         
         if session_id_str not in current_sessions_after:
             logger.info(f"Successfully terminated session {session_id}")
@@ -1693,12 +1784,45 @@ class MessagesEndpoint:
 
 # Create routes using the ASGIApp-compliant classes
 mcp_router = Router([
-    Route("/sse", endpoint=SseEndpoint(), methods=["GET"]),
-    Route("/messages/", endpoint=MessagesEndpoint(), methods=["POST"]),
+    Route("/sse", endpoint=AuthenticatedASGI(SseEndpoint()), methods=["GET"]),
+    Route("/messages/", endpoint=AuthenticatedASGI(MessagesEndpoint()), methods=["POST"]),
 ])
 
 # Mount the MCP router to the main app
 app.routes.append(Mount("/", app=mcp_router))
+
+@app.get("/files/{filename}", tags=["Files"])
+async def download_payload(filename: str, request: Request):
+    """Download a generated payload without exposing arbitrary server files."""
+    from fastapi.responses import FileResponse
+
+    if MCP_AUTH_TOKEN:
+        authorization = request.headers.get("authorization", "")
+        supplied_token = (
+            authorization[7:].strip()
+            if authorization.lower().startswith("bearer ")
+            else request.headers.get("x-mcp-token", "").strip()
+        )
+        if not secrets.compare_digest(supplied_token, MCP_AUTH_TOKEN):
+            raise HTTPException(
+                status_code=401,
+                detail="Authentication required.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+    try:
+        payload_path = _safe_payload_path(filename)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Payload not found.")
+
+    if not payload_path.is_file():
+        raise HTTPException(status_code=404, detail="Payload not found.")
+
+    return FileResponse(
+        path=str(payload_path),
+        filename=payload_path.name,
+        media_type="application/octet-stream",
+    )
 
 @app.get("/healthz", tags=["Health"])
 async def health_check():
@@ -1708,7 +1832,7 @@ async def health_check():
         logger.debug(f"Executing health check MSF call (core.version) with {RPC_CALL_TIMEOUT}s timeout...")
         # Use a lightweight call like core.version
         version_info = await asyncio.wait_for(
-            asyncio.to_thread(lambda: client.core.version),
+            asyncio.to_thread(lambda: _read_rpc_value(client.core, "version")),
             timeout=RPC_CALL_TIMEOUT
         )
         msf_version = version_info.get('version', 'N/A') if isinstance(version_info, dict) else 'N/A'
@@ -1777,6 +1901,12 @@ if __name__ == "__main__":
         logger.info("MCP stdio server finished.")
     else:  # HTTP/SSE mode (default)
         logger.info("Starting MCP server in HTTP/SSE transport mode.")
+        if args.host not in {'127.0.0.1', 'localhost', '::1'} and not MCP_AUTH_TOKEN:
+            logger.critical(
+                "Refusing to bind HTTP MCP endpoints to %s without MCP_AUTH_TOKEN.",
+                args.host,
+            )
+            sys.exit(2)
         
         # Check port availability
         check_host = args.host if args.host != '0.0.0.0' else '127.0.0.1'
