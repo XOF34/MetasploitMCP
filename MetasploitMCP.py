@@ -206,56 +206,6 @@ def get_msf_client() -> MsfRpcClient:
     logger.debug("Retrieved MSF client instance successfully.")
     return _msf_client_instance
 
-async def check_msf_connection() -> Dict[str, Any]:
-    """
-    Check the current status of the Metasploit RPC connection.
-    Returns connection status information for debugging.
-    """
-    try:
-        client = get_msf_client()
-        logger.debug(f"Testing MSF connection with {RPC_CALL_TIMEOUT}s timeout...")
-        version_info = await asyncio.wait_for(
-            asyncio.to_thread(lambda: _read_rpc_value(client.core, "version")),
-            timeout=RPC_CALL_TIMEOUT
-        )
-        msf_version = version_info.get('version', 'N/A') if isinstance(version_info, dict) else 'N/A'
-        return {
-            "status": "connected",
-            "server": f"{MSF_SERVER}:{MSF_PORT_STR}",
-            "ssl": MSF_SSL_STR,
-            "version": msf_version,
-            "message": "Connection to Metasploit RPC is healthy"
-        }
-    except asyncio.TimeoutError:
-        return {
-            "status": "timeout",
-            "server": f"{MSF_SERVER}:{MSF_PORT_STR}",
-            "ssl": MSF_SSL_STR,
-            "timeout_seconds": RPC_CALL_TIMEOUT,
-            "message": f"Metasploit server not responding within {RPC_CALL_TIMEOUT}s timeout"
-        }
-    except ConnectionError as e:
-        return {
-            "status": "not_initialized",
-            "server": f"{MSF_SERVER}:{MSF_PORT_STR}",
-            "ssl": MSF_SSL_STR,
-            "message": f"Metasploit client not initialized: {e}"
-        }
-    except MsfRpcError as e:
-        return {
-            "status": "rpc_error",
-            "server": f"{MSF_SERVER}:{MSF_PORT_STR}",
-            "ssl": MSF_SSL_STR,
-            "message": f"Metasploit RPC error: {e}"
-        }
-    except Exception as e:
-        return {
-            "status": "error",
-            "server": f"{MSF_SERVER}:{MSF_PORT_STR}",
-            "ssl": MSF_SSL_STR,
-            "message": f"Unexpected error: {e}"
-        }
-
 @contextlib.asynccontextmanager
 async def get_msf_console() -> MsfConsole:
     """
@@ -1319,6 +1269,58 @@ async def run_auxiliary_module(
             command='run',
             timeout=timeout_seconds
         )
+
+@mcp.tool()
+async def check_msf_connection() -> Dict[str, Any]:
+    """
+    Check the current status of the Metasploit RPC connection.
+    Returns connection status information for debugging (status, server,
+    SSL, MSF version, or an explanation of why the connection is unavailable).
+    """
+    try:
+        client = get_msf_client()
+        logger.debug(f"Testing MSF connection with {RPC_CALL_TIMEOUT}s timeout...")
+        version_info = await asyncio.wait_for(
+            asyncio.to_thread(lambda: _read_rpc_value(client.core, "version")),
+            timeout=RPC_CALL_TIMEOUT
+        )
+        msf_version = version_info.get('version', 'N/A') if isinstance(version_info, dict) else 'N/A'
+        return {
+            "status": "connected",
+            "server": f"{MSF_SERVER}:{MSF_PORT_STR}",
+            "ssl": MSF_SSL_STR,
+            "version": msf_version,
+            "message": "Connection to Metasploit RPC is healthy"
+        }
+    except asyncio.TimeoutError:
+        return {
+            "status": "timeout",
+            "server": f"{MSF_SERVER}:{MSF_PORT_STR}",
+            "ssl": MSF_SSL_STR,
+            "timeout_seconds": RPC_CALL_TIMEOUT,
+            "message": f"Metasploit server not responding within {RPC_CALL_TIMEOUT}s timeout"
+        }
+    except ConnectionError as e:
+        return {
+            "status": "not_initialized",
+            "server": f"{MSF_SERVER}:{MSF_PORT_STR}",
+            "ssl": MSF_SSL_STR,
+            "message": f"Metasploit client not initialized: {e}"
+        }
+    except MsfRpcError as e:
+        return {
+            "status": "rpc_error",
+            "server": f"{MSF_SERVER}:{MSF_PORT_STR}",
+            "ssl": MSF_SSL_STR,
+            "message": f"Metasploit RPC error: {e}"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "server": f"{MSF_SERVER}:{MSF_PORT_STR}",
+            "ssl": MSF_SSL_STR,
+            "message": f"Unexpected error: {e}"
+        }
 
 @mcp.tool()
 async def list_active_sessions() -> Dict[str, Any]:
