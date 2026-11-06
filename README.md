@@ -168,6 +168,10 @@ This tool provides direct access to Metasploit Framework capabilities, which inc
 - Only run in segregated test environments or with proper authorization
 - Be aware that post-exploitation commands can result in significant system modifications
 
+For a detailed Kali Dell setup with machine roles, private-network topology,
+step-by-step installation, verification, safe starter workflows, and
+troubleshooting, see [KALI_REFERENCE_MANUAL.md](KALI_REFERENCE_MANUAL.md).
+
 ## Example Workflows
 
 ### Basic Exploitation
