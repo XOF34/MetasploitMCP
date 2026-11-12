@@ -172,6 +172,13 @@ For a detailed Kali Dell setup with machine roles, private-network topology,
 step-by-step installation, verification, safe starter workflows, and
 troubleshooting, see [KALI_REFERENCE_MANUAL.md](KALI_REFERENCE_MANUAL.md).
 
+For a phase-by-phase Kali command reference — reconnaissance, scanning,
+enumeration, exploitation, password attacks, post-exploitation, web testing,
+and a full Wi-Fi auditing section (monitor mode, handshake/PMKID capture,
+cracking, WPS) — see
+[KALI_PENTEST_WIFI_REFERENCE.md](KALI_PENTEST_WIFI_REFERENCE.md). All of it is
+gated behind the same authorization and scope boundary described above.
+
 ## Example Workflows
 
 ### Basic Exploitation
