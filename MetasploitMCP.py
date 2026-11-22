@@ -23,6 +23,8 @@ from pymetasploit3.msfrpc import MsfConsole, MsfRpcClient, MsfRpcError
 from starlette.applications import Starlette
 from starlette.routing import Mount, Route, Router
 
+import deepseek_client
+
 # --- Configuration & Constants ---
 
 # Metasploit Connection Config (from environment variables)
@@ -1321,6 +1323,36 @@ async def check_msf_connection() -> Dict[str, Any]:
             "ssl": MSF_SSL_STR,
             "message": f"Unexpected error: {e}"
         }
+
+@mcp.tool()
+async def query_deepseek(
+    prompt: str,
+    context: str = "",
+    system_prompt: str = "",
+    model: str = "",
+    max_tokens: int = deepseek_client.DEFAULT_MAX_TOKENS,
+) -> Dict[str, Any]:
+    """
+    Ask the DeepSeek API a question, optionally about some text such as module or session output.
+    Note: prompt and context are sent to DeepSeek's servers.
+
+    Args:
+        prompt: The question or instruction.
+        context: Optional text for DeepSeek to work from (e.g., console or session output).
+        system_prompt: Optional system prompt to steer the answer.
+        model: Optional model id; defaults to DEEPSEEK_MODEL or deepseek-flash.
+        max_tokens: Maximum tokens DeepSeek may generate, including its reasoning.
+
+    Returns:
+        Dictionary with status, response, model, finish_reason and usage, or status and message on error.
+    """
+    return await deepseek_client.query(
+        prompt,
+        context=context,
+        system_prompt=system_prompt,
+        model=model,
+        max_tokens=max_tokens,
+    )
 
 @mcp.tool()
 async def list_active_sessions() -> Dict[str, Any]:

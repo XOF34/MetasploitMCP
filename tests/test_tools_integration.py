@@ -544,3 +544,19 @@ class TestListenerManagement:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestDeepSeekTool:
+    """Test the query_deepseek MCP tool wiring."""
+
+    @pytest.mark.asyncio
+    async def test_query_deepseek_forwards_arguments(self):
+        expected = {"status": "success", "response": "pong"}
+        with patch('MetasploitMCP.deepseek_client.query', new=AsyncMock(return_value=expected)) as mock_query:
+            result = await MetasploitMCP.query_deepseek(
+                "Summarize", context="output", system_prompt="sys", model="deepseek-v4-pro", max_tokens=100
+            )
+        assert result == expected
+        mock_query.assert_awaited_once_with(
+            "Summarize", context="output", system_prompt="sys", model="deepseek-v4-pro", max_tokens=100
+        )
