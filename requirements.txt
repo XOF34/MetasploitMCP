@@ -1,5 +1,5 @@
 fastapi>=0.95.0
 uvicorn[standard]>=0.22.0
 pymetasploit3>=1.0.6
-mcp>=1.6.0
+mcp>=1.6.0,<2  # mcp 2.x renamed FastMCP; this server uses the 1.x API
 fastmcp>=2.10.3

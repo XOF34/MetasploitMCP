@@ -39,6 +39,10 @@ This MCP server provides a bridge between large language models like Claude and 
 - **start_listener**: Create a new multi/handler to receive connections
 - **stop_job**: Terminate any running job or handler
 
+### AI Assistance
+
+- **query_deepseek**: Ask the DeepSeek API a question, optionally passing module or session output as `context`
+
 ## Prerequisites
 
 - Metasploit Framework installed and msfrpcd running
@@ -61,6 +65,10 @@ This MCP server provides a bridge between large language models like Claude and 
    MSF_ENABLED=true
    PAYLOAD_SAVE_DIR=/path/to/save/payloads  # Optional: Where to save generated payloads
    MCP_AUTH_TOKEN=replace-with-a-long-random-token  # Required when binding HTTP to a non-localhost address
+   DEEPSEEK_API_KEY=your-deepseek-key  # Required only for the query_deepseek tool
+   DEEPSEEK_MODEL=deepseek-flash       # Optional: default model (e.g. deepseek-v4-pro)
+   DEEPSEEK_BASE_URL=https://api.deepseek.com  # Optional: must be https
+   DEEPSEEK_TIMEOUT=120                # Optional: request timeout in seconds
    ```
 
    Set `MSF_ENABLED=false` to start the MCP server without connecting to
@@ -115,6 +123,18 @@ printf '%s\n' 'The service failed after deployment.' | \
   python3 prompt_summarizer.py --acronym RCA
 ```
 
+### DeepSeek from the Terminal
+
+`deepseek_client.py` sends a prompt to DeepSeek using only the Python standard
+library. Piped input is sent along as context:
+
+```bash
+export DEEPSEEK_API_KEY=your-deepseek-key
+python3 deepseek_client.py "Explain what an SMB relay attack is"
+nmap -sV 10.0.0.5 | python3 deepseek_client.py "Summarize the exposed services"
+python3 deepseek_client.py --model deepseek-v4-pro --max-tokens 8000 "Write a test plan"
+```
+
 ### Claude Desktop Integration
 
 For Claude Desktop integration, configure `claude_desktop_config.json`:
@@ -167,6 +187,7 @@ This tool provides direct access to Metasploit Framework capabilities, which inc
 - Always validate and review all commands before execution
 - Only run in segregated test environments or with proper authorization
 - Be aware that post-exploitation commands can result in significant system modifications
+- `query_deepseek` sends its `prompt` and `context` to DeepSeek's servers; leave out target data, credentials and hashes you are not permitted to share with a third party
 
 For a detailed Kali Dell setup with machine roles, private-network topology,
 step-by-step installation, verification, safe starter workflows, and
