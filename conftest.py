@@ -11,23 +11,13 @@ from unittest.mock import Mock, patch
 # Add the project root to Python path
 sys.path.insert(0, os.path.dirname(__file__))
 
+from tests import stubs
+
 def pytest_configure(config):
     """Configure pytest with custom settings."""
-    # Mock external dependencies that might not be available
-    mock_modules = [
-        'uvicorn',
-        'fastapi', 
-        'mcp.server.fastmcp',
-        'mcp.server.sse',
-        'pymetasploit3.msfrpc',
-        'starlette.applications',
-        'starlette.routing',
-        'mcp.server.session'
-    ]
-    
-    for module in mock_modules:
-        if module not in sys.modules:
-            sys.modules[module] = Mock()
+    # Stub external dependencies before any test module imports MetasploitMCP.
+    # Every test file uses these same stubs (see tests/stubs.py).
+    stubs.install()
 
 def pytest_collection_modifyitems(config, items):
     """Modify test collection to add markers automatically."""

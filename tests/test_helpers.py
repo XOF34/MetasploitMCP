@@ -13,42 +13,25 @@ from typing import Dict, Any
 # Add the parent directory to the path to import MetasploitMCP
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-# Mock the dependencies that aren't available in test environment
-sys.modules['uvicorn'] = Mock()
-sys.modules['fastapi'] = Mock()
-sys.modules['mcp.server.fastmcp'] = Mock()
-sys.modules['mcp.server.sse'] = Mock()
-sys.modules['pymetasploit3.msfrpc'] = Mock()
-sys.modules['starlette.applications'] = Mock()
-sys.modules['starlette.routing'] = Mock()
-sys.modules['mcp.server.session'] = Mock()
+# Stub the dependencies that aren't available in the test environment.
+# Every test file shares these stubs (see tests/stubs.py).
+from tests import stubs
+stubs.install()
 
-# Create mock classes for MSF objects
-class MockMsfRpcClient:
-    def __init__(self):
-        self.modules = Mock()
-        self.core = Mock()
-        self.sessions = Mock()
-        self.jobs = Mock()
-        self.consoles = Mock()
-
-class MockMsfConsole:
+# Create mock classes for MSF objects. MetasploitMCP checks consoles with
+# isinstance(..., MsfConsole), so the mock console derives from the shared stub.
+class MockMsfConsole(stubs.MsfConsole):
     def __init__(self, cid='test-console-id'):
         self.cid = cid
-        
+
     def read(self):
         return {'data': 'test output', 'prompt': 'msf6 > ', 'busy': False}
-        
+
     def write(self, command):
         return True
 
-class MockMsfRpcError(Exception):
-    pass
-
-# Patch the MSF modules
-sys.modules['pymetasploit3.msfrpc'].MsfRpcClient = MockMsfRpcClient
-sys.modules['pymetasploit3.msfrpc'].MsfConsole = MockMsfConsole  
-sys.modules['pymetasploit3.msfrpc'].MsfRpcError = MockMsfRpcError
+# MetasploitMCP catches and re-raises the stubbed MsfRpcError, so tests use that same class.
+MockMsfRpcError = stubs.MsfRpcError
 
 # Import after mocking
 import MetasploitMCP
