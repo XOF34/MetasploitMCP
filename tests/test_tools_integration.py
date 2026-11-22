@@ -14,32 +14,11 @@ from typing import Dict, Any
 # Add the parent directory to the path to import MetasploitMCP
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-# Mock the dependencies that aren't available in test environment
-sys.modules['uvicorn'] = Mock()
-sys.modules['fastapi'] = Mock()
-sys.modules['starlette.applications'] = Mock()
-sys.modules['starlette.routing'] = Mock()
-
-# Create a special mock for FastMCP that preserves the tool decorator behavior
-class MockFastMCP:
-    def __init__(self, *args, **kwargs):
-        pass
-    
-    def tool(self):
-        # Return a decorator that just returns the original function
-        def decorator(func):
-            return func
-        return decorator
-
-# Mock the MCP modules with our custom FastMCP
-mcp_server_fastmcp = Mock()
-mcp_server_fastmcp.FastMCP = MockFastMCP
-sys.modules['mcp.server.fastmcp'] = mcp_server_fastmcp
-sys.modules['mcp.server.sse'] = Mock()
-sys.modules['mcp.server.session'] = Mock()
-
-# Mock pymetasploit3 module
-sys.modules['pymetasploit3.msfrpc'] = Mock()
+# Stub the dependencies that aren't available in the test environment.
+# Every test file shares these stubs (see tests/stubs.py); their FastMCP.tool()
+# returns each tool function unchanged, so the tests below call the real tools.
+from tests import stubs
+stubs.install()
 
 # Create comprehensive mock classes
 class MockMsfRpcClient:
@@ -59,7 +38,8 @@ class MockMsfRpcClient:
         self.sessions.list = Mock(return_value={})
         self.jobs.list = Mock(return_value={})
 
-class MockMsfConsole:
+# Derives from the shared stub so MetasploitMCP's isinstance(..., MsfConsole) check accepts it.
+class MockMsfConsole(stubs.MsfConsole):
     def __init__(self, cid='test-console-id'):
         self.cid = cid
         self._command_history = []
@@ -92,13 +72,8 @@ class MockMsfModule:
     def payload_generate(self):
         return b"test_payload_bytes"
 
-class MockMsfRpcError(Exception):
-    pass
-
-# Apply mocks
-sys.modules['pymetasploit3.msfrpc'].MsfRpcClient = MockMsfRpcClient
-sys.modules['pymetasploit3.msfrpc'].MsfConsole = MockMsfConsole  
-sys.modules['pymetasploit3.msfrpc'].MsfRpcError = MockMsfRpcError
+# MetasploitMCP catches the stubbed MsfRpcError, so tests raise that same class.
+MockMsfRpcError = stubs.MsfRpcError
 
 # Import the module and then get the actual functions
 import MetasploitMCP
