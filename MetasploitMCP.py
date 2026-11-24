@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 # --- Third-party Libraries ---
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, Response
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from mcp.server.sse import SseServerTransport
 from pymetasploit3.msfrpc import MsfConsole, MsfRpcClient, MsfRpcError
 from starlette.applications import Starlette
@@ -362,7 +362,7 @@ ServerSession._received_request = _received_request
 ####################################################################################
 
 # --- MCP Server Initialization ---
-mcp = FastMCP("Metasploit Tools Enhanced (Streamlined)")
+mcp = MCPServer("Metasploit Tools Enhanced (Streamlined)")
 
 # --- Internal Helper Functions ---
 
@@ -1765,6 +1765,10 @@ app = FastAPI(
 # Setup MCP transport (SSE for HTTP mode)
 sse = SseServerTransport("/messages/")
 
+# MCP 2.x: Import initialization types
+from mcp.server.lowlevel.server import InitializationOptions
+from mcp.types import ServerCapabilities
+
 # Define ASGI handlers properly with Starlette's ASGIApp interface
 class SseEndpoint:
     async def __call__(self, scope, receive, send):
@@ -1773,7 +1777,14 @@ class SseEndpoint:
         client_port = scope.get('client')[1] if scope.get('client') else 'unknown'
         logger.info(f"New SSE connection from {client_host}:{client_port}")
         async with sse.connect_sse(scope, receive, send) as (read_stream, write_stream):
-            await mcp._mcp_server.run(read_stream, write_stream, mcp._mcp_server.create_initialization_options())
+            init_options = InitializationOptions(
+                server_name="Metasploit Tools Enhanced (Streamlined)",
+                server_version="1.6.0",
+                title="Metasploit MCP Server (Streamlined)",
+                description="Provides core Metasploit functionality via the Model Context Protocol.",
+                capabilities=ServerCapabilities()
+            )
+            await mcp._lowlevel_server.run(read_stream, write_stream, init_options)
         logger.info(f"SSE connection closed from {client_host}:{client_port}")
 
 class MessagesEndpoint:
