@@ -15,12 +15,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 # Mock the dependencies that aren't available in test environment
 sys.modules['uvicorn'] = Mock()
 sys.modules['fastapi'] = Mock()
-sys.modules['mcp.server.fastmcp'] = Mock()
 sys.modules['mcp.server.sse'] = Mock()
 sys.modules['pymetasploit3.msfrpc'] = Mock()
 sys.modules['starlette.applications'] = Mock()
 sys.modules['starlette.routing'] = Mock()
-sys.modules['mcp.server.session'] = Mock()
 
 # Import the function we want to test
 from MetasploitMCP import _parse_options_gracefully

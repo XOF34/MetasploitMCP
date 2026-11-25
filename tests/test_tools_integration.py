@@ -21,23 +21,8 @@ sys.modules['fastapi'] = Mock()
 sys.modules['starlette.applications'] = Mock()
 sys.modules['starlette.routing'] = Mock()
 
-# Create a special mock for FastMCP that preserves the tool decorator behavior
-class MockFastMCP:
-    def __init__(self, *args, **kwargs):
-        pass
-    
-    def tool(self):
-        # Return a decorator that just returns the original function
-        def decorator(func):
-            return func
-        return decorator
-
-# Mock the MCP modules with our custom FastMCP
-mcp_server_fastmcp = Mock()
-mcp_server_fastmcp.FastMCP = MockFastMCP
-sys.modules['mcp.server.fastmcp'] = mcp_server_fastmcp
+# The real MCPServer.tool() decorator returns the original function, so tools can be called directly.
 sys.modules['mcp.server.sse'] = Mock()
-sys.modules['mcp.server.session'] = Mock()
 
 # Mock pymetasploit3 module
 sys.modules['pymetasploit3.msfrpc'] = Mock()
