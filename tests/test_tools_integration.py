@@ -721,3 +721,18 @@ class TestListenerManagement:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestToolErrorsReachClient:
+    """MCP 2.x passes only a ToolError's message to the client; any other exception arrives as a bare error."""
+
+    @pytest.mark.asyncio
+    async def test_not_connected_message_reaches_client(self):
+        from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
+
+        with patch.object(MetasploitMCP, '_msf_client_instance', None):
+            with pytest.raises(ToolError) as exc_info:
+                await MetasploitMCP.mcp.call_tool("list_exploits", {})
+
+        assert not isinstance(exc_info.value, UnexpectedToolError)
+        assert "not been initialized" in str(exc_info.value)

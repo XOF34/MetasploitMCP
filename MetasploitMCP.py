@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, Response
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.sse import SseServerTransport
 from pymetasploit3.msfrpc import MsfConsole, MsfRpcClient, MsfRpcError
 from starlette.applications import Starlette
@@ -218,11 +219,18 @@ def start_msf_if_enabled() -> None:
     else:
         logger.warning("Metasploit integration is disabled (MSF_ENABLED=%s).", MSF_ENABLED_STR)
 
+class MsfNotConnectedError(ToolError, ConnectionError):
+    """No Metasploit RPC connection. As a ToolError, MCP shows its message to the client."""
+
+
 def get_msf_client() -> MsfRpcClient:
     """Gets the initialized MSF client instance, raising an error if not ready."""
     if _msf_client_instance is None:
         logger.error("Metasploit client has not been initialized. Check MSF server connection.")
-        raise ConnectionError("Metasploit client has not been initialized.") # Strict check preferred
+        raise MsfNotConnectedError(
+            "Metasploit client has not been initialized. Check that msfrpcd is running "
+            "and that MSF_SERVER, MSF_PORT and MSF_PASSWORD match it."
+        )
     logger.debug("Retrieved MSF client instance successfully.")
     return _msf_client_instance
 
