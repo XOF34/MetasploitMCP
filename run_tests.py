@@ -10,6 +10,9 @@ import argparse
 import subprocess
 from pathlib import Path
 
+# Raise this as tests are added; coverage of MetasploitMCP.py was 49.8% when it was set.
+COVERAGE_FLOOR = 49
+
 def run_command(cmd, description=""):
     """Run a command and handle errors."""
     if description:
@@ -82,6 +85,9 @@ def main():
         cmd.extend(["--cov=MetasploitMCP", "--cov-report=term-missing"])
         if args.html:
             cmd.append("--cov-report=html:htmlcov")
+        # A subset cannot reach a whole-file floor, so only full-suite runs are gated.
+        if not (args.options or args.helpers or args.tools or args.unit or args.integration):
+            cmd.append(f"--cov-fail-under={COVERAGE_FLOOR}")
     
     # Add slow/network test options
     if args.slow:
