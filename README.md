@@ -52,6 +52,11 @@ This MCP server provides a bridge between large language models like Claude and 
    ```
    pip install -r requirements.txt
    ```
+   If `pymetasploit3` fails to build with `AttributeError: install_layout`, pip picked up a Debian-packaged
+   setuptools that doesn't match your Python. Build it in an isolated environment instead:
+   ```
+   pip install --use-pep517 -r requirements.txt
+   ```
 3. Configure environment variables (optional):
    ```
    MSF_PASSWORD=yourpassword

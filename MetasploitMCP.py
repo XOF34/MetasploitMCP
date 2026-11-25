@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, Response
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.sse import SseServerTransport
 from pymetasploit3.msfrpc import MsfConsole, MsfRpcClient, MsfRpcError
 from starlette.applications import Starlette
@@ -218,11 +219,18 @@ def start_msf_if_enabled() -> None:
     else:
         logger.warning("Metasploit integration is disabled (MSF_ENABLED=%s).", MSF_ENABLED_STR)
 
+class MsfNotConnectedError(ToolError, ConnectionError):
+    """No Metasploit RPC connection. As a ToolError, MCP shows its message to the client."""
+
+
 def get_msf_client() -> MsfRpcClient:
     """Gets the initialized MSF client instance, raising an error if not ready."""
     if _msf_client_instance is None:
         logger.error("Metasploit client has not been initialized. Check MSF server connection.")
-        raise ConnectionError("Metasploit client has not been initialized.") # Strict check preferred
+        raise MsfNotConnectedError(
+            "Metasploit client has not been initialized. Check that msfrpcd is running "
+            "and that MSF_SERVER, MSF_PORT and MSF_PASSWORD match it."
+        )
     logger.debug("Retrieved MSF client instance successfully.")
     return _msf_client_instance
 
@@ -1841,9 +1849,6 @@ mcp_router = Router([
     Route("/messages/", endpoint=AuthenticatedASGI(MessagesEndpoint()), methods=["POST"]),
 ])
 
-# Mount the MCP router to the main app
-app.routes.append(Mount("/", app=mcp_router))
-
 @app.get("/files/{filename}", tags=["Files"])
 async def download_payload(filename: str, request: Request):
     """Download a generated payload without exposing arbitrary server files."""
@@ -1917,6 +1922,9 @@ def find_available_port(start_port, host='127.0.0.1', max_attempts=10):
                 continue
     logger.warning(f"Could not find available port in range {start_port}-{start_port+max_attempts-1} on {host}. Using default {start_port}.")
     return start_port
+
+# Mounted last: Starlette matches routes in order, so a mount at "/" registered earlier shadows /files and /healthz.
+app.routes.append(Mount("/", app=mcp_router))
 
 if __name__ == "__main__":
     # --- Setup argument parser for transport mode and server configuration ---
