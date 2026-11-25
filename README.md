@@ -289,13 +289,13 @@ make test-debug
 - **`tests/test_helpers.py`**: Unit tests for internal helper functions and MSF client management
 - **`tests/test_tools_integration.py`**: Integration tests for all MCP tools with mocked Metasploit backend
 - **`conftest.py`**: Shared test fixtures and configuration
-- **`pytest.ini`**: Pytest configuration with coverage settings
+- **`pytest.ini`**: Pytest configuration: test discovery, markers and async mode
 
 ### Test Features
 
 - **Comprehensive Mocking**: All Metasploit dependencies are mocked, so tests run without requiring an actual MSF installation
 - **Async Support**: Full async/await testing support using pytest-asyncio
-- **Coverage Reporting**: Detailed coverage analysis with HTML reports
+- **Coverage Reporting**: Detailed coverage analysis with HTML reports; a full-suite coverage run (`python run_tests.py --all --coverage`) fails below a 49% floor
 - **Parametrized Tests**: Efficient testing of multiple input scenarios
 - **Fixture Management**: Reusable test fixtures for common setup scenarios
 
