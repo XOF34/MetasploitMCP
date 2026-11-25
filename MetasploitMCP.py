@@ -74,10 +74,14 @@ _SENSITIVE_KEY_PARTS = (
 )
 
 
+def _is_sensitive_key(key: Any) -> bool:
+    return any(part in str(key).upper() for part in _SENSITIVE_KEY_PARTS)
+
+
 def _redact_options(options: Dict[str, Any]) -> Dict[str, Any]:
     """Return a safe representation of module options for diagnostic logging."""
     return {
-        key: '<redacted>' if any(part in key.upper() for part in _SENSITIVE_KEY_PARTS) else value
+        key: '<redacted>' if _is_sensitive_key(key) else value
         for key, value in options.items()
     }
 
@@ -376,7 +380,7 @@ def _parse_options_gracefully(options: Union[Dict[str, Any], str, None]) -> Dict
         if not options.strip():
             return {}
             
-        logger.info(f"Converting string format options to dict: {options}")
+        logger.info("Converting string format options to dict.")
         parsed_options = {}
         
         try:
@@ -410,7 +414,7 @@ def _parse_options_gracefully(options: Union[Dict[str, Any], str, None]) -> Dict
                 
                 parsed_options[key] = value
             
-            logger.info(f"Successfully converted string options to dict: {parsed_options}")
+            logger.info("Successfully converted string options to dict: %s", _redact_options(parsed_options))
             return parsed_options
             
         except Exception as e:
@@ -477,8 +481,9 @@ async def _set_module_options(module_obj: Any, options: Dict[str, Any]):
             # logger.debug(f"Set option {k}={v} (original: {original_value})")
         except (MsfRpcError, KeyError, TypeError) as e:
              # Catch potential errors if option doesn't exist or type is wrong
-             logger.error(f"Failed to set option {k}={v} on module: {e}")
-             raise ValueError(f"Failed to set option '{k}' to '{original_value}': {e}") from e
+             shown = '<redacted>' if _is_sensitive_key(k) else original_value
+             logger.error(f"Failed to set option {k}={shown} on module: {e}")
+             raise ValueError(f"Failed to set option '{k}' to '{shown}': {e}") from e
 
 async def _execute_module_rpc(
     module_type: str,
@@ -521,7 +526,7 @@ async def _execute_module_rpc(
                  logger.error(f"Failed to prepare payload object for '{payload_name}': {e}")
                  return {"status": "error", "message": f"Failed to prepare payload '{payload_name}': {e}"}
         else:
-             logger.warning(f"Invalid payload_spec format: {payload_spec}. Expected string or dict with 'name'.")
+             logger.warning(f"Invalid payload_spec format ({type(payload_spec).__name__}). Expected string or dict with 'name'.")
              return {"status": "error", "message": "Invalid payload specification format."}
 
     logger.info(f"Executing module {full_module_path} as background job via RPC...")
@@ -891,7 +896,6 @@ async def generate_payload(
         Dictionary containing status, message, payload size/info, and server-side save path.
     """
     client = get_msf_client()
-    logger.info(f"Generating payload '{payload_type}' (Format: {format_type}) via RPC. Options: {options}")
 
     # Parse options gracefully
     try:
@@ -901,6 +905,11 @@ async def generate_payload(
 
     if not parsed_options:
         return {"status": "error", "message": "Payload 'options' dictionary (e.g., LHOST, LPORT) is required."}
+
+    logger.info(
+        "Generating payload '%s' (Format: %s) via RPC. Options: %s",
+        payload_type, format_type, _redact_options(parsed_options),
+    )
 
     try:
         # Get the payload module object

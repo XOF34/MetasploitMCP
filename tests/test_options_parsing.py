@@ -242,6 +242,14 @@ class TestParseOptionsGracefully:
             assert any("Converting string format" in msg for msg in call_args)
             assert any("Successfully converted" in msg for msg in call_args)
 
+    def test_logging_redacts_sensitive_values(self):
+        """Sensitive option values never reach the log, other values still do."""
+        with patch('MetasploitMCP.logger') as mock_logger:
+            _parse_options_gracefully("LHOST=192.168.1.100,PASSWORD=hunter2")
+            logged = " ".join(str(arg) for call in mock_logger.method_calls for arg in call.args)
+            assert "hunter2" not in logged
+            assert "192.168.1.100" in logged
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

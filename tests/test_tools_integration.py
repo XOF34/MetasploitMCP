@@ -311,6 +311,21 @@ class TestPayloadGeneration:
         assert result["status"] == "error"
         assert "Invalid options format" in result["message"]
 
+    @pytest.mark.asyncio
+    async def test_generate_payload_does_not_log_sensitive_options(self, mock_client_and_module):
+        """Sensitive values in payload options are redacted in every log line."""
+        with patch('MetasploitMCP.logger') as mock_logger:
+            result = await generate_payload(
+                payload_type="windows/meterpreter/reverse_tcp",
+                format_type="exe",
+                options="LHOST=192.168.1.100,LPORT=4444,PASSWORD=hunter2",
+            )
+
+        assert result["status"] == "success"
+        logged = " ".join(str(arg) for call in mock_logger.method_calls for arg in call.args)
+        assert "hunter2" not in logged
+        assert "192.168.1.100" in logged
+
 
 class TestExploitExecution:
     """Test exploit execution functionality."""

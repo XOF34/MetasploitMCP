@@ -230,6 +230,19 @@ class TestSetModuleOptions:
         with pytest.raises(ValueError, match="Failed to set option"):
             await _set_module_options(mock_module, options)
 
+    @pytest.mark.asyncio
+    async def test_set_module_options_error_redacts_sensitive_value(self, mock_module):
+        """A failed sensitive option keeps its value out of the error and the log."""
+        mock_module.__setitem__.side_effect = KeyError("Invalid option")
+
+        with patch('MetasploitMCP.logger') as mock_logger:
+            with pytest.raises(ValueError, match="Failed to set option 'PASSWORD'") as exc_info:
+                await _set_module_options(mock_module, {'PASSWORD': 'hunter2'})
+
+        assert 'hunter2' not in str(exc_info.value)
+        logged = " ".join(str(arg) for call in mock_logger.method_calls for arg in call.args)
+        assert 'hunter2' not in logged
+
 
 class TestGetMsfConsole:
     """Test the get_msf_console context manager."""
