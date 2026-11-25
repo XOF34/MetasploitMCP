@@ -1213,7 +1213,7 @@ async def run_auxiliary_module(
              check_result = await _execute_module_console(
                  module_type='auxiliary',
                  module_name=module_name,
-                 module_options=options,
+                 module_options=module_options,
                  command='check',
                  timeout=timeout_seconds
              )
