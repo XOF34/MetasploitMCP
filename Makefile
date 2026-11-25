@@ -19,13 +19,16 @@ help:
 	@echo "  format         - Format code"
 	@echo "  clean          - Clean up generated files"
 
+# Minimum total coverage (%) enforced by `make test` only
+COV_MIN ?= 44
+
 # Install test dependencies
 install-deps:
 	python -m pip install -r requirements-test.txt
 
 # Test targets
 test:
-	python run_tests.py --all
+	python run_tests.py --all --cov-fail-under=$(COV_MIN)
 
 test-unit:
 	python run_tests.py --unit

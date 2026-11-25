@@ -53,6 +53,10 @@ def main():
     parser.add_argument("--tools", action="store_true", help="Run MCP tools tests only")
     parser.add_argument("--coverage", action="store_true", help="Generate coverage report")
     parser.add_argument("--html", action="store_true", help="Generate HTML coverage report")
+    parser.add_argument(
+        "--cov-fail-under", type=float, metavar="PERCENT", default=None,
+        help="Fail if total coverage is below PERCENT (only meaningful for the full suite)",
+    )
     parser.add_argument("--slow", action="store_true", help="Include slow tests")
     parser.add_argument("--network", action="store_true", help="Include network tests")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
@@ -83,6 +87,10 @@ def main():
         if args.html:
             cmd.append("--cov-report=html:htmlcov")
     
+    # Coverage is always measured (pytest.ini); this only adds a pass/fail threshold
+    if args.cov_fail_under is not None:
+        cmd.append(f"--cov-fail-under={args.cov_fail_under:g}")
+
     # Add slow/network test options
     if args.slow:
         cmd.append("--run-slow")

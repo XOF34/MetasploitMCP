@@ -222,7 +222,7 @@ make install-deps
 # Run all tests
 python run_tests.py --all
 # OR
-make test
+make test   # also fails if total coverage drops below 44% (override: make test COV_MIN=50)
 
 # Run with coverage report
 python run_tests.py --all --coverage
