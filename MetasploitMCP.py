@@ -51,6 +51,11 @@ logger.debug(f"LOG_LEVEL       : {LOG_LEVEL}")
 
 session_shell_type: Dict[str, str] = {}
 
+
+def _forget_closed_sessions(current_sessions: Any) -> None:
+    for sid in [s for s in session_shell_type if s not in current_sessions]:
+        del session_shell_type[sid]
+
 # Timeouts and Polling Intervals (in seconds)
 DEFAULT_CONSOLE_READ_TIMEOUT = 15  # Default for quick console commands
 LONG_CONSOLE_READ_TIMEOUT = 60   # For commands like run/exploit/check
@@ -1386,6 +1391,7 @@ async def send_session_command(
     try:
         # --- Get Session Info and Object ---
         current_sessions = await asyncio.to_thread(lambda: _read_rpc_value(client.sessions, "list"))
+        _forget_closed_sessions(current_sessions)
         if session_id_str not in current_sessions:
             logger.error(f"Session {session_id} not found.")
             return {"status": "error", "message": f"Session {session_id} not found."}
@@ -1413,17 +1419,20 @@ async def send_session_command(
                 # Use asyncio.wait_for to handle timeout manually since run_with_output doesn't support timeout parameter
                 if command == "shell":
                     if session_shell_type[session_id_str] == 'meterpreter':
-                        output = session.run_with_output(command, end_strs=['created.'])
+                        output = await asyncio.wait_for(
+                            asyncio.to_thread(lambda: session.run_with_output(command, end_strs=['created.'])),
+                            timeout=timeout_seconds
+                        )
                         session_shell_type[session_id_str] = 'shell'
-                        session.read()  # Clear buffer
+                        await asyncio.wait_for(asyncio.to_thread(session.read), timeout=timeout_seconds)  # Clear buffer
                     else:
                         output = "You are already in shell mode."
                 elif command == "exit":
                     if session_shell_type[session_id_str] == 'meterpreter':
                         output = "You are already in meterpreter mode. No need to exit."
                     else:
-                        session.read()  # Clear buffer
-                        session.detach()
+                        await asyncio.wait_for(asyncio.to_thread(session.read), timeout=timeout_seconds)  # Clear buffer
+                        await asyncio.wait_for(asyncio.to_thread(session.detach), timeout=timeout_seconds)
                         session_shell_type[session_id_str] = 'meterpreter'
                 else:
                     output = await asyncio.wait_for(
@@ -1439,7 +1448,7 @@ async def send_session_command(
                 logger.warning(f"Command '{command}' timed out on Meterpreter session {session_id}")
                 # Try a final read for potentially partial output
                 try:
-                    output = await asyncio.to_thread(lambda: session.read()) or ""
+                    output = await asyncio.wait_for(asyncio.to_thread(session.read), timeout=timeout_seconds) or ""
                 except Exception as read_err:
                     logger.debug("Unable to read partial Meterpreter output after timeout: %s", read_err)
             except (MsfRpcError, Exception) as run_err:
@@ -1447,7 +1456,7 @@ async def send_session_command(
                 message = f"Error executing Meterpreter command: {run_err}"
                 # Try a final read
                 try:
-                    output = await asyncio.to_thread(lambda: session.read()) or ""
+                    output = await asyncio.wait_for(asyncio.to_thread(session.read), timeout=timeout_seconds) or ""
                 except Exception as read_err:
                     logger.debug("Unable to read partial Meterpreter output after command error: %s", read_err)
 
@@ -1731,6 +1740,7 @@ async def terminate_session(session_id: int) -> Dict[str, Any]:
     try:
         # Check if session exists
         current_sessions = await asyncio.to_thread(lambda: _read_rpc_value(client.sessions, "list"))
+        _forget_closed_sessions(current_sessions)
         if session_id_str not in current_sessions:
             logger.error(f"Session {session_id} not found.")
             return {"status": "error", "message": f"Session {session_id} not found."}
@@ -1744,7 +1754,8 @@ async def terminate_session(session_id: int) -> Dict[str, Any]:
         # Verify termination
         await asyncio.sleep(1.0)  # Give MSF time to process termination
         current_sessions_after = await asyncio.to_thread(lambda: _read_rpc_value(client.sessions, "list"))
-        
+        _forget_closed_sessions(current_sessions_after)
+
         if session_id_str not in current_sessions_after:
             logger.info(f"Successfully terminated session {session_id}")
             return {"status": "success", "message": f"Session {session_id} terminated successfully."}

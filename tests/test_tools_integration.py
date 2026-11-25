@@ -8,6 +8,7 @@ import pytest
 import sys
 import os
 import asyncio
+import time
 from unittest.mock import Mock, patch, AsyncMock, MagicMock
 from typing import Dict, Any
 
@@ -490,9 +491,101 @@ class TestSessionManagement:
         ]
         
         result = await terminate_session(1)
-        
+
         assert result["status"] == "success"
         session.stop.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_send_session_command_forgets_closed_sessions(self, mock_session_environment):
+        """Shell-mode state is dropped for sessions Metasploit no longer lists."""
+        with patch.dict(MetasploitMCP.session_shell_type, {"1": "meterpreter", "7": "shell"}, clear=True):
+            await send_session_command(1, "sysinfo")
+
+            assert "7" not in MetasploitMCP.session_shell_type
+            assert MetasploitMCP.session_shell_type["1"] == "meterpreter"
+
+    @pytest.mark.asyncio
+    async def test_terminate_session_forgets_shell_state(self, mock_session_environment):
+        """A terminated session's shell-mode state is removed."""
+        client, session = mock_session_environment
+        client.sessions.list.side_effect = [{"1": {"type": "meterpreter"}}, {}]
+
+        with patch.dict(MetasploitMCP.session_shell_type, {"1": "shell"}, clear=True):
+            result = await terminate_session(1)
+
+            assert result["status"] == "success"
+            assert "1" not in MetasploitMCP.session_shell_type
+
+    @pytest.mark.asyncio
+    async def test_send_session_command_shell_transition(self, mock_session_environment):
+        """'shell' on a Meterpreter session opens a channel and switches to shell mode."""
+        client, session = mock_session_environment
+        session.run_with_output = Mock(return_value="Channel 1 created.")
+
+        with patch.dict(MetasploitMCP.session_shell_type, {}, clear=True):
+            result = await send_session_command(1, "shell")
+
+            assert result["status"] == "success"
+            session.run_with_output.assert_called_once_with("shell", end_strs=['created.'])
+            assert MetasploitMCP.session_shell_type["1"] == "shell"
+
+    @pytest.mark.asyncio
+    async def test_send_session_command_shell_transition_times_out(self, mock_session_environment):
+        """A hung 'shell' transition times out instead of blocking the event loop."""
+        client, session = mock_session_environment
+        session.run_with_output = Mock(side_effect=lambda *args, **kwargs: time.sleep(1.0))
+
+        with patch.dict(MetasploitMCP.session_shell_type, {}, clear=True):
+            start = time.monotonic()
+            result = await send_session_command(1, "shell", timeout_seconds=0.1)
+            elapsed = time.monotonic() - start
+
+            assert result["status"] == "timeout"
+            assert elapsed < 0.8
+            assert MetasploitMCP.session_shell_type["1"] == "meterpreter"
+
+    @pytest.mark.asyncio
+    async def test_send_session_command_exit_shell_mode(self, mock_session_environment):
+        """'exit' in shell mode detaches the channel and returns to Meterpreter mode."""
+        client, session = mock_session_environment
+        session.detach = Mock()
+
+        with patch.dict(MetasploitMCP.session_shell_type, {"1": "shell"}, clear=True):
+            result = await send_session_command(1, "exit")
+
+            assert result["status"] == "success"
+            session.detach.assert_called_once()
+            assert MetasploitMCP.session_shell_type["1"] == "meterpreter"
+
+    @pytest.mark.asyncio
+    async def test_send_session_command_exit_shell_mode_times_out(self, mock_session_environment):
+        """A hung detach times out and leaves the session in shell mode."""
+        client, session = mock_session_environment
+        session.detach = Mock(side_effect=lambda: time.sleep(1.0))
+
+        with patch.dict(MetasploitMCP.session_shell_type, {"1": "shell"}, clear=True):
+            start = time.monotonic()
+            result = await send_session_command(1, "exit", timeout_seconds=0.1)
+            elapsed = time.monotonic() - start
+
+            assert result["status"] == "timeout"
+            assert elapsed < 0.8
+            assert MetasploitMCP.session_shell_type["1"] == "shell"
+
+    @pytest.mark.asyncio
+    async def test_send_session_command_bounds_partial_read_after_hang(self, mock_session_environment):
+        """After a command times out, the follow-up read of partial output is bounded too."""
+        client, session = mock_session_environment
+        session.run_with_output = Mock(side_effect=lambda *args, **kwargs: time.sleep(1.0))
+        session.read = Mock(side_effect=lambda: time.sleep(1.0))
+
+        with patch.dict(MetasploitMCP.session_shell_type, {}, clear=True):
+            start = time.monotonic()
+            result = await send_session_command(1, "sysinfo", timeout_seconds=0.1)
+            elapsed = time.monotonic() - start
+
+        assert result["status"] == "timeout"
+        assert elapsed < 0.8
 
 
 class TestListenerManagement:
