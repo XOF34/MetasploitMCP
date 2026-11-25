@@ -86,6 +86,17 @@ def _redact_options(options: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+_CONSOLE_SET_RE = re.compile(r'^(\s*setg?\s+)(\S+)(\s+).+$', re.IGNORECASE | re.DOTALL)
+
+
+def _redact_console_command(cmd: str) -> str:
+    """Return a console command safe to log, masking the value of a sensitive set/setg."""
+    match = _CONSOLE_SET_RE.match(cmd)
+    if match and _is_sensitive_key(match.group(2)):
+        return f"{match.group(1)}{match.group(2)}{match.group(3)}<redacted>"
+    return cmd
+
+
 def _safe_payload_path(filename: str) -> pathlib.Path:
     """Return a payload path confined to PAYLOAD_SAVE_DIR."""
     base_dir = pathlib.Path(PAYLOAD_SAVE_DIR).expanduser().resolve()
@@ -281,8 +292,9 @@ async def run_command_safely(console: MsfConsole, cmd: str, execution_timeout: O
         logger.error(f"Console object {type(console)} lacks required methods (write, read).")
         raise TypeError("Unsupported console object type for command execution.")
 
+    log_cmd = _redact_console_command(cmd)
     try:
-        logger.debug(f"Running console command: {cmd}")
+        logger.debug(f"Running console command: {log_cmd}")
         await asyncio.to_thread(lambda: console.write(cmd + '\n'))
 
         output_buffer = b"" # Read as bytes to handle potential encoding issues and prompt matching
@@ -299,7 +311,7 @@ async def run_command_safely(console: MsfConsole, cmd: str, execution_timeout: O
 
             # Check overall timeout first
             if (current_time - start_time) > read_timeout:
-                 logger.warning(f"Overall timeout ({read_timeout}s) reached for console command '{cmd}'.")
+                 logger.warning(f"Overall timeout ({read_timeout}s) reached for console command '{log_cmd}'.")
                  break
 
             # Read available data
@@ -312,7 +324,7 @@ async def run_command_safely(console: MsfConsole, cmd: str, execution_timeout: O
                 prompt_str = chunk_result.get('prompt', '')
                 prompt_bytes = prompt_str.encode('utf-8', errors='replace') if isinstance(prompt_str, str) else prompt_str
             except Exception as read_err:
-                logger.warning(f"Error reading from console during command '{cmd}': {read_err}")
+                logger.warning(f"Error reading from console during command '{log_cmd}': {read_err}")
                 await asyncio.sleep(0.5) # Wait a bit before retrying or timing out
                 continue
 
@@ -323,27 +335,29 @@ async def run_command_safely(console: MsfConsole, cmd: str, execution_timeout: O
 
                 # Primary Completion Check: Did we receive the prompt?
                 if prompt_bytes and MSF_PROMPT_RE.search(prompt_bytes):
-                     logger.debug(f"Detected MSF prompt in console.read() result for '{cmd}'. Command likely complete.")
+                     logger.debug(f"Detected MSF prompt in console.read() result for '{log_cmd}'. Command likely complete.")
                      break
                 # Secondary Check: Does the buffered output end with the prompt?
                 # Needed if prompt wasn't in the last read chunk but arrived earlier.
                 if MSF_PROMPT_RE.search(output_buffer):
-                     logger.debug(f"Detected MSF prompt at end of buffer for '{cmd}'. Command likely complete.")
+                     logger.debug(f"Detected MSF prompt at end of buffer for '{log_cmd}'. Command likely complete.")
                      break
 
             # Fallback Completion Check: Inactivity timeout
             elif (current_time - last_data_time) > SESSION_READ_INACTIVITY_TIMEOUT: # Use a shorter inactivity timeout here
-                logger.debug(f"Console inactivity timeout ({SESSION_READ_INACTIVITY_TIMEOUT}s) reached for command '{cmd}'. Assuming complete.")
+                logger.debug(f"Console inactivity timeout ({SESSION_READ_INACTIVITY_TIMEOUT}s) reached for command '{log_cmd}'. Assuming complete.")
                 break
 
         # Decode the final buffer
         final_output = output_buffer.decode('utf-8', errors='replace').strip()
-        logger.debug(f"Final output for '{cmd}' (length {len(final_output)}):\n{final_output[:500]}{'...' if len(final_output) > 500 else ''}")
+        # Metasploit echoes "KEY => value" for set commands, so skip the preview when the value is sensitive.
+        preview = "" if log_cmd != cmd else f":\n{final_output[:500]}{'...' if len(final_output) > 500 else ''}"
+        logger.debug(f"Final output for '{log_cmd}' (length {len(final_output)}){preview}")
         return final_output
 
     except Exception as e:
-        logger.exception(f"Error executing console command '{cmd}'")
-        raise RuntimeError(f"Failed executing console command '{cmd}': {e}") from e
+        logger.exception(f"Error executing console command '{log_cmd}'")
+        raise RuntimeError(f"Failed executing console command '{log_cmd}': {e}") from e
 
 # --- MCP Server Initialization ---
 mcp = MCPServer("Metasploit Tools Enhanced (Streamlined)")
@@ -710,7 +724,9 @@ async def _execute_module_console(
                 setup_output = await run_command_safely(console, cmd, execution_timeout=DEFAULT_CONSOLE_READ_TIMEOUT)
                 # Basic error check in setup output
                 if any(err in setup_output for err in ["[-] Error setting", "Invalid option", "Unknown module", "Failed to load"]):
-                    error_msg = f"Error during setup command '{cmd}': {setup_output}"
+                    log_cmd = _redact_console_command(cmd)
+                    detail = "output withheld (sensitive value)" if log_cmd != cmd else setup_output
+                    error_msg = f"Error during setup command '{log_cmd}': {detail}"
                     logger.error(error_msg)
                     return {"status": "error", "message": error_msg, "module": full_module_path}
                 await asyncio.sleep(0.1) # Small delay between setup commands
