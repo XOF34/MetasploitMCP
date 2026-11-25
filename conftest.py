@@ -17,12 +17,10 @@ def pytest_configure(config):
     mock_modules = [
         'uvicorn',
         'fastapi', 
-        'mcp.server.fastmcp',
         'mcp.server.sse',
         'pymetasploit3.msfrpc',
         'starlette.applications',
         'starlette.routing',
-        'mcp.server.session'
     ]
     
     for module in mock_modules:

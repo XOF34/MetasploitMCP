@@ -8,6 +8,7 @@ import pytest
 import sys
 import os
 import asyncio
+import time
 from unittest.mock import Mock, patch, AsyncMock, MagicMock
 from typing import Dict, Any
 
@@ -20,23 +21,8 @@ sys.modules['fastapi'] = Mock()
 sys.modules['starlette.applications'] = Mock()
 sys.modules['starlette.routing'] = Mock()
 
-# Create a special mock for FastMCP that preserves the tool decorator behavior
-class MockFastMCP:
-    def __init__(self, *args, **kwargs):
-        pass
-    
-    def tool(self):
-        # Return a decorator that just returns the original function
-        def decorator(func):
-            return func
-        return decorator
-
-# Mock the MCP modules with our custom FastMCP
-mcp_server_fastmcp = Mock()
-mcp_server_fastmcp.FastMCP = MockFastMCP
-sys.modules['mcp.server.fastmcp'] = mcp_server_fastmcp
+# The real MCPServer.tool() decorator returns the original function, so tools can be called directly.
 sys.modules['mcp.server.sse'] = Mock()
-sys.modules['mcp.server.session'] = Mock()
 
 # Mock pymetasploit3 module
 sys.modules['pymetasploit3.msfrpc'] = Mock()
@@ -311,6 +297,57 @@ class TestPayloadGeneration:
         assert result["status"] == "error"
         assert "Invalid options format" in result["message"]
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("options", [
+        {"LHOST": "192.168.1.100", "LPORT": 0},
+        {"LHOST": "192.168.1.100", "LPORT": 70000},
+        {"LHOST": "192.168.1.100", "LPORT": "abc"},
+        {"LHOST": "192.168.1.100", "LPORT": True},
+        {"LHOST": "192.168.1.100", "lport": 0},
+        "LHOST=192.168.1.100,LPORT=99999",
+    ])
+    async def test_generate_payload_rejects_invalid_lport(self, mock_client_and_module, options):
+        """An out-of-range or non-numeric LPORT is rejected before Metasploit is called."""
+        client, module = mock_client_and_module
+
+        result = await generate_payload(
+            payload_type="windows/meterpreter/reverse_tcp",
+            format_type="exe",
+            options=options,
+        )
+
+        assert result["status"] == "error"
+        assert "Invalid LPORT" in result["message"]
+        assert module.options == {}
+
+    @pytest.mark.asyncio
+    async def test_generate_payload_accepts_numeric_string_lport(self, mock_client_and_module):
+        """A numeric string LPORT is accepted."""
+        client, module = mock_client_and_module
+
+        result = await generate_payload(
+            payload_type="windows/meterpreter/reverse_tcp",
+            format_type="exe",
+            options={"LHOST": "192.168.1.100", "LPORT": "4444"},
+        )
+
+        assert result["status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_generate_payload_does_not_log_sensitive_options(self, mock_client_and_module):
+        """Sensitive values in payload options are redacted in every log line."""
+        with patch('MetasploitMCP.logger') as mock_logger:
+            result = await generate_payload(
+                payload_type="windows/meterpreter/reverse_tcp",
+                format_type="exe",
+                options="LHOST=192.168.1.100,LPORT=4444,PASSWORD=hunter2",
+            )
+
+        assert result["status"] == "success"
+        logged = " ".join(str(arg) for call in mock_logger.method_calls for arg in call.args)
+        assert "hunter2" not in logged
+        assert "192.168.1.100" in logged
+
 
 class TestExploitExecution:
     """Test exploit execution functionality."""
@@ -352,6 +389,29 @@ class TestExploitExecution:
         
         assert result["status"] == "success"
         mock_rpc.assert_called_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("options,payload_options", [
+        ({"RHOSTS": "192.168.1.1"}, {"LHOST": "192.168.1.100", "LPORT": 0}),
+        ({"RHOSTS": "192.168.1.1"}, "LHOST=192.168.1.100,LPORT=70000"),
+        ({"RHOSTS": "192.168.1.1", "LPORT": "abc"}, {"LHOST": "192.168.1.100"}),
+    ])
+    async def test_run_exploit_rejects_invalid_lport(self, mock_exploit_environment, options, payload_options):
+        """An invalid LPORT in either option set is rejected before anything runs."""
+        client, mock_rpc, mock_console = mock_exploit_environment
+
+        result = await run_exploit(
+            module_name="windows/smb/ms17_010_eternalblue",
+            options=options,
+            payload_name="windows/meterpreter/reverse_tcp",
+            payload_options=payload_options,
+            run_as_job=True,
+        )
+
+        assert result["status"] == "error"
+        assert "Invalid LPORT" in result["message"]
+        mock_rpc.assert_not_called()
+        mock_console.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_run_exploit_string_payload_options(self, mock_exploit_environment):
@@ -475,9 +535,101 @@ class TestSessionManagement:
         ]
         
         result = await terminate_session(1)
-        
+
         assert result["status"] == "success"
         session.stop.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_send_session_command_forgets_closed_sessions(self, mock_session_environment):
+        """Shell-mode state is dropped for sessions Metasploit no longer lists."""
+        with patch.dict(MetasploitMCP.session_shell_type, {"1": "meterpreter", "7": "shell"}, clear=True):
+            await send_session_command(1, "sysinfo")
+
+            assert "7" not in MetasploitMCP.session_shell_type
+            assert MetasploitMCP.session_shell_type["1"] == "meterpreter"
+
+    @pytest.mark.asyncio
+    async def test_terminate_session_forgets_shell_state(self, mock_session_environment):
+        """A terminated session's shell-mode state is removed."""
+        client, session = mock_session_environment
+        client.sessions.list.side_effect = [{"1": {"type": "meterpreter"}}, {}]
+
+        with patch.dict(MetasploitMCP.session_shell_type, {"1": "shell"}, clear=True):
+            result = await terminate_session(1)
+
+            assert result["status"] == "success"
+            assert "1" not in MetasploitMCP.session_shell_type
+
+    @pytest.mark.asyncio
+    async def test_send_session_command_shell_transition(self, mock_session_environment):
+        """'shell' on a Meterpreter session opens a channel and switches to shell mode."""
+        client, session = mock_session_environment
+        session.run_with_output = Mock(return_value="Channel 1 created.")
+
+        with patch.dict(MetasploitMCP.session_shell_type, {}, clear=True):
+            result = await send_session_command(1, "shell")
+
+            assert result["status"] == "success"
+            session.run_with_output.assert_called_once_with("shell", end_strs=['created.'])
+            assert MetasploitMCP.session_shell_type["1"] == "shell"
+
+    @pytest.mark.asyncio
+    async def test_send_session_command_shell_transition_times_out(self, mock_session_environment):
+        """A hung 'shell' transition times out instead of blocking the event loop."""
+        client, session = mock_session_environment
+        session.run_with_output = Mock(side_effect=lambda *args, **kwargs: time.sleep(1.0))
+
+        with patch.dict(MetasploitMCP.session_shell_type, {}, clear=True):
+            start = time.monotonic()
+            result = await send_session_command(1, "shell", timeout_seconds=0.1)
+            elapsed = time.monotonic() - start
+
+            assert result["status"] == "timeout"
+            assert elapsed < 0.8
+            assert MetasploitMCP.session_shell_type["1"] == "meterpreter"
+
+    @pytest.mark.asyncio
+    async def test_send_session_command_exit_shell_mode(self, mock_session_environment):
+        """'exit' in shell mode detaches the channel and returns to Meterpreter mode."""
+        client, session = mock_session_environment
+        session.detach = Mock()
+
+        with patch.dict(MetasploitMCP.session_shell_type, {"1": "shell"}, clear=True):
+            result = await send_session_command(1, "exit")
+
+            assert result["status"] == "success"
+            session.detach.assert_called_once()
+            assert MetasploitMCP.session_shell_type["1"] == "meterpreter"
+
+    @pytest.mark.asyncio
+    async def test_send_session_command_exit_shell_mode_times_out(self, mock_session_environment):
+        """A hung detach times out and leaves the session in shell mode."""
+        client, session = mock_session_environment
+        session.detach = Mock(side_effect=lambda: time.sleep(1.0))
+
+        with patch.dict(MetasploitMCP.session_shell_type, {"1": "shell"}, clear=True):
+            start = time.monotonic()
+            result = await send_session_command(1, "exit", timeout_seconds=0.1)
+            elapsed = time.monotonic() - start
+
+            assert result["status"] == "timeout"
+            assert elapsed < 0.8
+            assert MetasploitMCP.session_shell_type["1"] == "shell"
+
+    @pytest.mark.asyncio
+    async def test_send_session_command_bounds_partial_read_after_hang(self, mock_session_environment):
+        """After a command times out, the follow-up read of partial output is bounded too."""
+        client, session = mock_session_environment
+        session.run_with_output = Mock(side_effect=lambda *args, **kwargs: time.sleep(1.0))
+        session.read = Mock(side_effect=lambda: time.sleep(1.0))
+
+        with patch.dict(MetasploitMCP.session_shell_type, {}, clear=True):
+            start = time.monotonic()
+            result = await send_session_command(1, "sysinfo", timeout_seconds=0.1)
+            elapsed = time.monotonic() - start
+
+        assert result["status"] == "timeout"
+        assert elapsed < 0.8
 
 
 class TestListenerManagement:

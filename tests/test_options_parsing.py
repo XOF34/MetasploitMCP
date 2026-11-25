@@ -15,12 +15,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 # Mock the dependencies that aren't available in test environment
 sys.modules['uvicorn'] = Mock()
 sys.modules['fastapi'] = Mock()
-sys.modules['mcp.server.fastmcp'] = Mock()
 sys.modules['mcp.server.sse'] = Mock()
 sys.modules['pymetasploit3.msfrpc'] = Mock()
 sys.modules['starlette.applications'] = Mock()
 sys.modules['starlette.routing'] = Mock()
-sys.modules['mcp.server.session'] = Mock()
 
 # Import the function we want to test
 from MetasploitMCP import _parse_options_gracefully
@@ -241,6 +239,14 @@ class TestParseOptionsGracefully:
             call_args = [call[0][0] for call in mock_logger.info.call_args_list]
             assert any("Converting string format" in msg for msg in call_args)
             assert any("Successfully converted" in msg for msg in call_args)
+
+    def test_logging_redacts_sensitive_values(self):
+        """Sensitive option values never reach the log, other values still do."""
+        with patch('MetasploitMCP.logger') as mock_logger:
+            _parse_options_gracefully("LHOST=192.168.1.100,PASSWORD=hunter2")
+            logged = " ".join(str(arg) for call in mock_logger.method_calls for arg in call.args)
+            assert "hunter2" not in logged
+            assert "192.168.1.100" in logged
 
 
 if __name__ == "__main__":

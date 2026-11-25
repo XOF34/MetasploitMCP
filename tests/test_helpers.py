@@ -16,12 +16,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 # Mock the dependencies that aren't available in test environment
 sys.modules['uvicorn'] = Mock()
 sys.modules['fastapi'] = Mock()
-sys.modules['mcp.server.fastmcp'] = Mock()
 sys.modules['mcp.server.sse'] = Mock()
 sys.modules['pymetasploit3.msfrpc'] = Mock()
 sys.modules['starlette.applications'] = Mock()
 sys.modules['starlette.routing'] = Mock()
-sys.modules['mcp.server.session'] = Mock()
 
 # Create mock classes for MSF objects
 class MockMsfRpcClient:
@@ -230,6 +228,19 @@ class TestSetModuleOptions:
         with pytest.raises(ValueError, match="Failed to set option"):
             await _set_module_options(mock_module, options)
 
+    @pytest.mark.asyncio
+    async def test_set_module_options_error_redacts_sensitive_value(self, mock_module):
+        """A failed sensitive option keeps its value out of the error and the log."""
+        mock_module.__setitem__.side_effect = KeyError("Invalid option")
+
+        with patch('MetasploitMCP.logger') as mock_logger:
+            with pytest.raises(ValueError, match="Failed to set option 'PASSWORD'") as exc_info:
+                await _set_module_options(mock_module, {'PASSWORD': 'hunter2'})
+
+        assert 'hunter2' not in str(exc_info.value)
+        logged = " ".join(str(arg) for call in mock_logger.method_calls for arg in call.args)
+        assert 'hunter2' not in logged
+
 
 class TestGetMsfConsole:
     """Test the get_msf_console context manager."""
@@ -324,6 +335,82 @@ class TestRunCommandSafely:
         # Should return empty string after timeout
         assert isinstance(result, str)
         assert result == ""  # Empty result after timeout
+
+    @pytest.mark.asyncio
+    async def test_run_command_safely_redacts_sensitive_set_command(self, mock_console):
+        """A sensitive set command is sent intact but its value is never logged."""
+        mock_console.read.return_value = {
+            'data': 'PASSWORD => hunter2\n',
+            'prompt': '\x01\x02msf6\x01\x02 \x01\x02> \x01\x02',
+            'busy': False
+        }
+
+        with patch('MetasploitMCP.logger') as mock_logger:
+            await run_command_safely(mock_console, 'set PASSWORD hunter2')
+
+        mock_console.write.assert_called_once_with('set PASSWORD hunter2\n')
+        logged = " ".join(str(arg) for call in mock_logger.method_calls for arg in call.args)
+        assert 'hunter2' not in logged
+
+    @pytest.mark.asyncio
+    async def test_run_command_safely_error_redacts_sensitive_set_command(self, mock_console):
+        """The raised error and its log line omit a sensitive set command's value."""
+        mock_console.write.side_effect = Exception("write failed")
+
+        with patch('MetasploitMCP.logger') as mock_logger:
+            with pytest.raises(RuntimeError) as exc_info:
+                await run_command_safely(mock_console, 'set SMBPass hunter2')
+
+        assert 'hunter2' not in str(exc_info.value)
+        logged = " ".join(str(arg) for call in mock_logger.method_calls for arg in call.args)
+        assert 'hunter2' not in logged
+
+
+class TestRedactConsoleCommand:
+    """Test redaction of console commands for logging."""
+
+    @pytest.mark.parametrize("cmd,expected", [
+        ("set PASSWORD hunter2", "set PASSWORD <redacted>"),
+        ("set SMBPass 'pass word'", "set SMBPass <redacted>"),
+        ("SETG API_TOKEN abc123", "SETG API_TOKEN <redacted>"),
+        ("set RHOSTS 10.0.0.5", "set RHOSTS 10.0.0.5"),
+        ("set PAYLOAD windows/meterpreter/reverse_tcp", "set PAYLOAD windows/meterpreter/reverse_tcp"),
+        ("exploit", "exploit"),
+    ])
+    def test_redact_console_command(self, cmd, expected):
+        assert MetasploitMCP._redact_console_command(cmd) == expected
+
+
+class TestExecuteModuleConsoleRedaction:
+    """Test that console module execution keeps sensitive values out of errors and logs."""
+
+    @pytest.mark.asyncio
+    async def test_setup_error_redacts_sensitive_value(self):
+        import contextlib
+
+        @contextlib.asynccontextmanager
+        async def fake_console():
+            yield Mock()
+
+        async def fake_run(console, cmd, execution_timeout=None):
+            if cmd.startswith('set PASSWORD'):
+                return "[-] Error setting PASSWORD => hunter2"
+            return ""
+
+        with patch('MetasploitMCP.get_msf_console', fake_console), \
+             patch('MetasploitMCP.run_command_safely', new=fake_run), \
+             patch('MetasploitMCP.logger') as mock_logger:
+            result = await MetasploitMCP._execute_module_console(
+                module_type='auxiliary',
+                module_name='scanner/smb/smb_login',
+                module_options={'PASSWORD': 'hunter2'},
+                command='run',
+            )
+
+        assert result['status'] == 'error'
+        assert 'hunter2' not in result['message']
+        logged = " ".join(str(arg) for call in mock_logger.method_calls for arg in call.args)
+        assert 'hunter2' not in logged
 
 
 class TestFindAvailablePort:
