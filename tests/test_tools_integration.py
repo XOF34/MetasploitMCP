@@ -313,6 +313,42 @@ class TestPayloadGeneration:
         assert "Invalid options format" in result["message"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("options", [
+        {"LHOST": "192.168.1.100", "LPORT": 0},
+        {"LHOST": "192.168.1.100", "LPORT": 70000},
+        {"LHOST": "192.168.1.100", "LPORT": "abc"},
+        {"LHOST": "192.168.1.100", "LPORT": True},
+        {"LHOST": "192.168.1.100", "lport": 0},
+        "LHOST=192.168.1.100,LPORT=99999",
+    ])
+    async def test_generate_payload_rejects_invalid_lport(self, mock_client_and_module, options):
+        """An out-of-range or non-numeric LPORT is rejected before Metasploit is called."""
+        client, module = mock_client_and_module
+
+        result = await generate_payload(
+            payload_type="windows/meterpreter/reverse_tcp",
+            format_type="exe",
+            options=options,
+        )
+
+        assert result["status"] == "error"
+        assert "Invalid LPORT" in result["message"]
+        assert module.options == {}
+
+    @pytest.mark.asyncio
+    async def test_generate_payload_accepts_numeric_string_lport(self, mock_client_and_module):
+        """A numeric string LPORT is accepted."""
+        client, module = mock_client_and_module
+
+        result = await generate_payload(
+            payload_type="windows/meterpreter/reverse_tcp",
+            format_type="exe",
+            options={"LHOST": "192.168.1.100", "LPORT": "4444"},
+        )
+
+        assert result["status"] == "success"
+
+    @pytest.mark.asyncio
     async def test_generate_payload_does_not_log_sensitive_options(self, mock_client_and_module):
         """Sensitive values in payload options are redacted in every log line."""
         with patch('MetasploitMCP.logger') as mock_logger:

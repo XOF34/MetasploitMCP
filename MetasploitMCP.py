@@ -445,6 +445,22 @@ def _parse_options_gracefully(options: Union[Dict[str, Any], str, None]) -> Dict
     except (TypeError, ValueError) as e:
         raise ValueError(f"Options must be a dictionary or comma-separated string format 'key=value,key2=value2'. Got {type(options)}: {options}")
 
+
+def _lport_error(options: Dict[str, Any]) -> Optional[str]:
+    """Return an error message if options carry an LPORT that is not an integer in 1-65535."""
+    for key, value in options.items():
+        if str(key).upper() != 'LPORT':
+            continue
+        if isinstance(value, int) and not isinstance(value, bool):
+            port = value
+        elif isinstance(value, str) and value.strip().isdigit():
+            port = int(value)
+        else:
+            port = None
+        if port is None or not 1 <= port <= 65535:
+            return "Invalid LPORT. Must be between 1 and 65535."
+    return None
+
 async def _get_module_object(module_type: str, module_name: str) -> Any:
     """Gets the MSF module object, handling potential path variations."""
     client = get_msf_client()
@@ -926,6 +942,10 @@ async def generate_payload(
 
     if not parsed_options:
         return {"status": "error", "message": "Payload 'options' dictionary (e.g., LHOST, LPORT) is required."}
+
+    lport_error = _lport_error(parsed_options)
+    if lport_error:
+        return {"status": "error", "message": lport_error}
 
     logger.info(
         "Generating payload '%s' (Format: %s) via RPC. Options: %s",
