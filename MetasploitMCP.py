@@ -1097,7 +1097,7 @@ async def run_exploit(
                  logger.warning(f"Error from metasploit: {check_result}")
                  return {"status": "aborted", "message": f"Check indicates a failure: {check_result.get('message')}", "check_output": check_result.get("module_output")}
 
-             if is_not_vulnerable or (not is_vulnerable and check_result.get("status") == "error"):
+             if is_not_vulnerable:
                  logger.warning(f"Check indicates target is likely not vulnerable to {module_name}.")
                  return {"status": "aborted", "message": f"Check indicates target not vulnerable. Exploit not attempted.", "check_output": check_result.get("module_output")}
              elif not is_vulnerable:
