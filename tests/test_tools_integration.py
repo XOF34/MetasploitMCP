@@ -391,6 +391,29 @@ class TestExploitExecution:
         mock_rpc.assert_called_once()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("options,payload_options", [
+        ({"RHOSTS": "192.168.1.1"}, {"LHOST": "192.168.1.100", "LPORT": 0}),
+        ({"RHOSTS": "192.168.1.1"}, "LHOST=192.168.1.100,LPORT=70000"),
+        ({"RHOSTS": "192.168.1.1", "LPORT": "abc"}, {"LHOST": "192.168.1.100"}),
+    ])
+    async def test_run_exploit_rejects_invalid_lport(self, mock_exploit_environment, options, payload_options):
+        """An invalid LPORT in either option set is rejected before anything runs."""
+        client, mock_rpc, mock_console = mock_exploit_environment
+
+        result = await run_exploit(
+            module_name="windows/smb/ms17_010_eternalblue",
+            options=options,
+            payload_name="windows/meterpreter/reverse_tcp",
+            payload_options=payload_options,
+            run_as_job=True,
+        )
+
+        assert result["status"] == "error"
+        assert "Invalid LPORT" in result["message"]
+        mock_rpc.assert_not_called()
+        mock_console.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_run_exploit_string_payload_options(self, mock_exploit_environment):
         """Test exploit execution with string payload options."""
         client, mock_rpc, mock_console = mock_exploit_environment

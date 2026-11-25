@@ -1122,6 +1122,10 @@ async def run_exploit(
     except ValueError as e:
         return {"status": "error", "message": f"Invalid payload_options format: {e}"}
 
+    lport_error = _lport_error(parsed_payload_options) or _lport_error(options or {})
+    if lport_error:
+        return {"status": "error", "message": lport_error}
+
     payload_spec = None
     if payload_name:
         payload_spec = {"name": payload_name, "options": parsed_payload_options}
