@@ -1841,9 +1841,6 @@ mcp_router = Router([
     Route("/messages/", endpoint=AuthenticatedASGI(MessagesEndpoint()), methods=["POST"]),
 ])
 
-# Mount the MCP router to the main app
-app.routes.append(Mount("/", app=mcp_router))
-
 @app.get("/files/{filename}", tags=["Files"])
 async def download_payload(filename: str, request: Request):
     """Download a generated payload without exposing arbitrary server files."""
@@ -1917,6 +1914,9 @@ def find_available_port(start_port, host='127.0.0.1', max_attempts=10):
                 continue
     logger.warning(f"Could not find available port in range {start_port}-{start_port+max_attempts-1} on {host}. Using default {start_port}.")
     return start_port
+
+# Mounted last: Starlette matches routes in order, so a mount at "/" registered earlier shadows /files and /healthz.
+app.routes.append(Mount("/", app=mcp_router))
 
 if __name__ == "__main__":
     # --- Setup argument parser for transport mode and server configuration ---
