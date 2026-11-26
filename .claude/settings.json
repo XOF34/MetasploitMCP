@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "default_mode": "default",
+    "allow_tools": [
+      "git",
+      "bash",
+      "read",
+      "edit",
+      "write",
+      "glob",
+      "grep"
+    ]
+  },
+  "skills": {
+    "search_paths": [
+      ".claude/skills"
+    ]
+  }
+}
